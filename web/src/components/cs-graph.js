@@ -223,17 +223,17 @@ export class CsGraph extends LitElement {
   _onStoreChanged(e) {
     const { key, keys } = e.detail;
     const changed = keys || [key];
-    // Re-render when navigation state changes externally (tours, search)
-    if (changed.includes('currentLevel') || changed.includes('currentModule') || changed.includes('currentFile')) {
-      this._syncViewToState();
-    }
     if (changed.includes('DATA')) {
       this._hasIdeas = !!store.state.DATA?.ideaStructure;
+    }
+    // Only re-render if we're not already in a render cycle
+    if (this._rendering) return;
+    if (changed.includes('currentLevel') || changed.includes('currentModule') || changed.includes('currentFile')) {
+      this._syncViewToState();
     }
   }
 
   _syncViewToState() {
-    if (this._rendering) return;
     this._rendering = true;
     try {
       const { currentLevel, currentModule, currentFile, currentSubdir } = store.state;
@@ -860,11 +860,16 @@ export class CsGraph extends LitElement {
     const file = mod.files.find(f => f.path === filePath);
     if (!file) return;
 
-    store.setBatch({
-      currentLevel: 'symbols',
-      currentFile: file,
-    });
-    this._buildSymbolGraph(file);
+    this._rendering = true;
+    try {
+      store.setBatch({
+        currentLevel: 'symbols',
+        currentFile: file,
+      });
+      this._buildSymbolGraph(file);
+    } finally {
+      this._rendering = false;
+    }
   }
 
   _buildSymbolGraph(file) {
@@ -1248,18 +1253,39 @@ export class CsGraph extends LitElement {
   /** Navigate to a specific file by path — used by search, tours, etc. */
   navigateToFile(filePath) {
     const DATA = store.state.DATA;
+    let targetMod = null;
+    let targetFile = null;
+
     for (const mod of DATA.modules) {
       const file = mod.files.find(f => f.path === filePath);
       if (file) {
-        store.setBatch({ currentModule: mod.name, currentSubdir: null });
-        this._drillToSymbols(filePath);
-        return;
+        targetMod = mod.name;
+        targetFile = file;
+        break;
       }
     }
-    const rootFile = DATA.rootFiles?.find(f => f.path === filePath);
-    if (rootFile) {
-      store.setBatch({ currentModule: 'root', currentSubdir: null });
-      this._drillToSymbols(filePath);
+    if (!targetFile) {
+      const rootFile = DATA.rootFiles?.find(f => f.path === filePath);
+      if (rootFile) {
+        targetMod = 'root';
+        targetFile = rootFile;
+      }
+    }
+    if (!targetMod || !targetFile) return;
+
+    // Set all state in one batch to avoid intermediate _syncViewToState
+    // triggering _renderModuleView with stale currentLevel
+    this._rendering = true;
+    try {
+      store.setBatch({
+        currentModule: targetMod,
+        currentSubdir: null,
+        currentLevel: 'symbols',
+        currentFile: targetFile,
+      });
+      this._buildSymbolGraph(targetFile);
+    } finally {
+      this._rendering = false;
     }
   }
 
