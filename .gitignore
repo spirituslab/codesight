@@ -3,3 +3,4 @@ web/data.js
 .server.pid
 .env
 .codesight-cache.json
+.superpowers/
