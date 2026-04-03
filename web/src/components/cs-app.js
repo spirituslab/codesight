@@ -35,18 +35,31 @@ export class CsApp extends LitElement {
       width: 280px;
       background: var(--bg-primary);
       border-right: 1px solid var(--border);
-      overflow-y: auto;
+      overflow: hidden;
       flex-shrink: 0;
       transition: width 0.2s ease;
+      display: flex;
+      flex-direction: column;
+    }
+    ::slotted([slot="sidebar"]) {
+      flex: 1;
+      min-height: 0;
     }
     .sidebar.collapsed { width: 0; overflow: hidden; border: none; }
     .sidebar::-webkit-scrollbar { width: 6px; }
     .sidebar::-webkit-scrollbar-thumb { background: var(--ctp-surface1); border-radius: 3px; }
     .graph-area {
       flex: 1;
+      display: flex;
+      flex-direction: column;
       background: var(--bg-graph);
       position: relative;
       overflow: hidden;
+      min-width: 0;
+    }
+    ::slotted([slot="graph"]) {
+      flex: 1;
+      min-height: 0;
     }
     .chat-panel {
       width: 320px;
@@ -54,6 +67,12 @@ export class CsApp extends LitElement {
       border-left: 1px solid var(--accent-secondary);
       transition: width 0.2s ease;
       overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    ::slotted([slot="chat"]) {
+      flex: 1;
+      min-height: 0;
     }
     .chat-panel.closed { width: 0; border: none; }
   `];

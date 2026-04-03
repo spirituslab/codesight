@@ -31,6 +31,7 @@ export class CsGraph extends LitElement {
       flex: 1;
       min-height: 0;
       position: relative;
+      overflow: hidden;
     }
 
     #idea-layer {
@@ -38,12 +39,14 @@ export class CsGraph extends LitElement {
       min-width: 200px;
       position: relative;
       border-right: 1px solid var(--border);
+      flex-shrink: 0;
     }
     #idea-layer.hidden { display: none; }
 
     #code-layer {
       flex: 1;
       min-width: 0;
+      min-height: 0;
       position: relative;
     }
     #code-layer.full { width: 100%; }
