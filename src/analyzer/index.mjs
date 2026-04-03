@@ -5,6 +5,9 @@ import { detectLanguage } from "./detector.mjs";
 import { parseFile } from "./parser.mjs";
 import { getLanguage } from "../languages/index.mjs";
 import { buildCrossReferences } from "./references.mjs";
+import { buildFileIndex } from "./file-index.mjs";
+import { refineModuleGrouping } from "./modules.mjs";
+import { loadCache, saveCache, hashContent, getCachedParse, setCachedParse, pruneCache } from "./cache.mjs";
 
 const BATCH_SIZE = 30;
 
@@ -114,6 +117,7 @@ async function detectEntryPoints(projectRoot, allFiles) {
 export async function analyze(projectRoot, options = {}) {
   const startTime = Date.now();
   const { extraIgnore = [], maxFiles = 5000 } = options;
+  const warnings = [];
 
   console.log(`Scanning ${projectRoot}...`);
 
@@ -142,8 +146,32 @@ export async function analyze(projectRoot, options = {}) {
   const projectName = await detectProjectName(projectRoot);
   const languages = Object.keys(langCounts);
 
-  // 4. Parse files in batches
+  // 3.5 Build file path index for accurate import resolution
+  const fileIndex = buildFileIndex(supportedFiles.map(f => f.path), projectRoot);
+
+  // 3.6 Read tsconfig.json for path aliases (TypeScript/JavaScript projects)
+  try {
+    const tsconfigPath = resolve(projectRoot, "tsconfig.json");
+    const tsconfigRaw = await readFile(tsconfigPath, "utf-8");
+    // Strip comments (tsconfig allows them) and trailing commas
+    const stripped = tsconfigRaw
+      .replace(/\/\/.*$/gm, "")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/,\s*([\]}])/g, "$1");
+    const tsconfig = JSON.parse(stripped);
+    const co = tsconfig.compilerOptions || {};
+    if (co.paths || co.baseUrl) {
+      fileIndex.tsconfig = { paths: co.paths || {}, baseUrl: co.baseUrl || "." };
+      console.log(`  tsconfig.json: ${Object.keys(co.paths || {}).length} path aliases, baseUrl="${co.baseUrl || "."}"`);
+    }
+  } catch {
+    // No tsconfig.json or invalid — that's fine
+  }
+
+  // 4. Parse files in batches (with incremental caching)
+  const cache = await loadCache(projectRoot);
   const moduleMap = new Map();
+  let cacheHits = 0;
 
   for (let i = 0; i < supportedFiles.length; i += BATCH_SIZE) {
     const batch = supportedFiles.slice(i, i + BATCH_SIZE);
@@ -152,15 +180,45 @@ export async function analyze(projectRoot, options = {}) {
         try {
           const content = await readFile(filePath, "utf-8");
           const lineCount = content.split("\n").length;
-          const parsed = parseFile(content, langId);
-          if (!parsed) return null;
-
           const lang = getLanguage(langId);
           const relPath = relative(projectRoot, filePath);
+          const contentHash = hashContent(content);
 
-          // Resolve imports
-          const resolvedImports = parsed.imports.map(imp => {
-            const resolved = lang.resolveImport(imp.source, filePath, projectRoot);
+          // Check cache
+          const cached = getCachedParse(cache, relPath, contentHash);
+          let symbols, imports, rootNode;
+
+          if (cached) {
+            // Use cached symbols/imports, but re-parse for AST if file has functions/methods
+            symbols = cached.symbols;
+            rootNode = null;
+            cacheHits++;
+
+            // Re-parse only if we need the AST for call graph extraction
+            const hasFunctions = symbols.some(s => s.kind === 'function' || s.kind === 'method');
+            if (hasFunctions) {
+              const parsed = parseFile(content, langId);
+              if (parsed) rootNode = parsed.rootNode;
+            }
+
+            imports = cached.rawImports;
+          } else {
+            const parsed = parseFile(content, langId);
+            if (!parsed) return null;
+            symbols = parsed.symbols;
+            rootNode = parsed.rootNode;
+            imports = parsed.imports;
+
+            // Cache the result (symbols + raw imports, not resolved imports or AST)
+            setCachedParse(cache, relPath, contentHash, {
+              symbols: symbols.map(s => ({ ...s, usedBy: [] })), // strip transient fields
+              rawImports: imports,
+            });
+          }
+
+          // Resolve imports (always, since file index may have changed)
+          const resolvedImports = imports.map(imp => {
+            const resolved = lang.resolveImport(imp.source, filePath, projectRoot, fileIndex);
             return {
               source: imp.source,
               resolvedPath: resolved.resolvedPath,
@@ -179,8 +237,9 @@ export async function analyze(projectRoot, options = {}) {
               path: relPath,
               language: langId,
               lineCount,
-              symbols: parsed.symbols,
+              symbols,
               imports: resolvedImports,
+              _rootNode: rootNode, // transient: used by callgraph, stripped before serialization
             },
           };
         } catch (err) {
@@ -206,13 +265,20 @@ export async function analyze(projectRoot, options = {}) {
       process.stdout.write(`  Parsed ${Math.min(i + BATCH_SIZE, supportedFiles.length)}/${supportedFiles.length} files\r`);
     }
   }
-  console.log(`  Parsed ${supportedFiles.length}/${supportedFiles.length} files`);
+  console.log(`  Parsed ${supportedFiles.length}/${supportedFiles.length} files${cacheHits > 0 ? ` (${cacheHits} cached)` : ''}`);
+
+  // Save cache (prune removed files first)
+  pruneCache(cache, supportedFiles.map(f => relative(projectRoot, f.path)));
+  await saveCache(projectRoot, cache);
+
+  // 4.5 Refine module grouping (split oversized modules, detect monorepo patterns)
+  const refinedModuleMap = refineModuleGrouping(moduleMap, projectRoot);
 
   // 5. Build modules array
   const modules = [];
   const rootFiles = [];
 
-  for (const [name, data] of moduleMap.entries()) {
+  for (const [name, data] of refinedModuleMap.entries()) {
     const totalSymbols = data.files.reduce((s, f) => s + f.symbols.length, 0);
     const totalFunctions = data.files.reduce((s, f) => s + f.symbols.filter(sym => sym.kind === "function").length, 0);
     const totalClasses = data.files.reduce((s, f) => s + f.symbols.filter(sym => sym.kind === "class").length, 0);
@@ -282,14 +348,9 @@ export async function analyze(projectRoot, options = {}) {
   for (const file of allFileInfos) {
     for (const imp of file.imports) {
       if (imp.resolvedModule === "external" || !imp.resolvedPath) continue;
-      // Find which file this import resolves to
-      for (const target of allFileInfos) {
-        const targetNoExt = target.path.replace(/\.[^.]+$/, "");
-        if (targetNoExt === imp.resolvedPath || target.path === imp.resolvedPath ||
-            targetNoExt.endsWith("/" + imp.resolvedPath) || targetNoExt === "src/" + imp.resolvedPath) {
-          importedByCount.set(target.path, (importedByCount.get(target.path) || 0) + 1);
-          break;
-        }
+      // resolvedPath is now exact (set by fileIndex during import resolution)
+      if (fileIndex.has(imp.resolvedPath)) {
+        importedByCount.set(imp.resolvedPath, (importedByCount.get(imp.resolvedPath) || 0) + 1);
       }
     }
   }
@@ -304,14 +365,34 @@ export async function analyze(projectRoot, options = {}) {
     .slice(0, 20)
     .map(f => ({ path: f.path, name: f.name, importedByCount: f.importedByCount, isEntryPoint: f.isEntryPoint }));
 
+  // 10. Build call graph
+  console.log('  Building call graph...');
+  const { buildCallGraph } = await import('./callgraph.mjs');
+  const callGraph = buildCallGraph(modules, rootFiles, projectRoot, warnings);
+  console.log(`  Call graph: ${callGraph.stats.totalCalls} calls (${callGraph.stats.exact} exact, ${callGraph.stats.inferred} inferred, ${callGraph.stats.ambiguous} ambiguous, ${callGraph.stats.unresolved} unresolved)`);
+
+  // Strip transient AST nodes before serialization
+  for (const file of allFileInfos) {
+    delete file._rootNode;
+  }
+
+  // 11. Compute impact
+  const { computeImpact } = await import('./impact.mjs');
+  const impactMap = computeImpact(modules, rootFiles, callGraph);
+  const impactedFileCount = Object.keys(impactMap).length;
+
   const elapsed = Date.now() - startTime;
   console.log(`Done in ${elapsed}ms`);
   console.log(`  ${modules.length} modules, ${rootFiles.length} root files`);
   console.log(`  ${edges.length} module-to-module edges`);
   console.log(`  ${allFileInfos.reduce((s, f) => s + f.symbols.length, 0)} symbols extracted`);
   console.log(`  ${entryPointPaths.size} entry points, ${keyFiles.length} key files`);
+  console.log(`  ${impactedFileCount} files with dependents`);
+  if (warnings.length > 0) {
+    console.warn(`  ${warnings.length} warning(s) during analysis`);
+  }
 
-  return {
+  const result = {
     generatedAt: new Date().toISOString(),
     projectName,
     languages,
@@ -319,5 +400,49 @@ export async function analyze(projectRoot, options = {}) {
     rootFiles,
     edges,
     keyFiles,
+    callGraph,
+    impactMap,
+    warnings,
   };
+
+  // Generate basic tours from call graph (no LLM needed)
+  if (callGraph.edges.length > 0) {
+    const { generateTours } = await import('../llm/tours.mjs');
+    const basicTours = await generateTours(result, null);
+    if (basicTours.length > 0) {
+      result.tours = basicTours;
+    }
+  }
+
+  // LLM enhancement (optional)
+  if (options.llm) {
+    const { generateExplanations } = await import('../llm/explain.mjs');
+    const { generateIdeaStructure } = await import('../llm/ideas.mjs');
+
+    console.log('\nGenerating LLM explanations...');
+    await generateExplanations(result, options.llm);
+
+    console.log('Generating idea structure...');
+    const ideaStructure = await generateIdeaStructure(result, options.llm);
+    if (ideaStructure) {
+      result.ideaStructure = ideaStructure;
+    }
+
+    console.log('Generating guided tours...');
+    const { generateTours } = await import('../llm/tours.mjs');
+    const tours = await generateTours(result, options.llm);
+    if (tours.length > 0) {
+      result.tours = tours;
+      console.log(`  ${tours.length} tours generated`);
+    }
+
+    result.llmGenerated = true;
+    result.llmProvider = options.llm.provider;
+    result.llmModel = options.llm.model;
+
+    const usage = options.llm.getUsage();
+    console.log(`\nLLM usage: ~${usage.inputTokens} input tokens, ~${usage.outputTokens} output tokens`);
+  }
+
+  return result;
 }

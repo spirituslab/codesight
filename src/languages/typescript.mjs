@@ -1,4 +1,5 @@
 import { resolve, dirname, relative } from "path";
+import { getModuleName as sharedGetModuleName, getModuleFromRelPath } from "../analyzer/modules.mjs";
 
 function loadGrammar(require) {
   return require("tree-sitter-typescript").typescript;
@@ -9,20 +10,62 @@ function extractSymbols(rootNode, source) {
   const lines = source.split("\n");
 
   for (const node of rootNode.children) {
+    let decl = node;
+    let exported = false;
     if (node.type === "export_statement") {
-      const decl = node.childForFieldName("declaration");
-      if (decl) {
-        const sym = extractDeclaration(decl, lines, true);
-        if (sym) symbols.push(sym);
+      decl = node.childForFieldName("declaration");
+      exported = true;
+      if (!decl) continue;
+    }
+
+    const sym = extractDeclaration(decl, lines, exported);
+    if (sym) {
+      symbols.push(sym);
+      // Extract class methods as separate symbols for call graph resolution
+      if (sym.kind === "class") {
+        const methods = extractClassMethods(decl, lines, sym.name);
+        symbols.push(...methods);
       }
-      // export { ... } re-exports — skip, handled as imports
-    } else {
-      const sym = extractDeclaration(node, lines, false);
-      if (sym) symbols.push(sym);
     }
   }
 
   return symbols;
+}
+
+function extractClassMethods(classNode, lines, className) {
+  const methods = [];
+  const body = classNode.childForFieldName("body");
+  if (!body) return methods;
+
+  for (const member of body.children) {
+    if (member.type !== "method_definition") continue;
+    const nameNode = member.childForFieldName("name");
+    if (!nameNode) continue;
+    const name = nameNode.text;
+    if (name === "constructor") continue;
+
+    const parameters = extractParameters(member.childForFieldName("parameters"));
+    const returnType = extractReturnType(member);
+    const comment = extractComment(member, lines);
+    const startLine = member.startPosition.row;
+    const endLine = member.endPosition.row;
+    const source = lines.slice(startLine, endLine + 1).join("\n");
+
+    methods.push({
+      name,
+      kind: "method",
+      exported: false,
+      className,
+      signature: buildSignature(member, lines),
+      parameters,
+      returnType,
+      comment,
+      source,
+      line: startLine + 1,
+      usedBy: [],
+    });
+  }
+  return methods;
 }
 
 function extractDeclaration(node, lines, exported) {
@@ -274,7 +317,188 @@ function extractImports(rootNode, _source) {
   return imports;
 }
 
-function resolveImport(importPath, fromFile, projectRoot) {
+/**
+ * Extract function calls from a symbol's body using tree-sitter AST traversal.
+ * @param {object} rootNode - the file's root AST node
+ * @param {object[]} symbols - extracted symbols with line numbers
+ * @param {object[]} fileImports - resolved imports for this file
+ * @returns {Map<string, Array>} symbolName → calls array
+ */
+function extractCalls(rootNode, symbols, fileImports) {
+  const callMap = new Map();
+
+  // Build import lookup: local name → { source, resolvedPath, resolvedModule }
+  const importLookup = new Map();
+  for (const imp of fileImports) {
+    for (const sym of imp.symbols) {
+      importLookup.set(sym, {
+        source: imp.source,
+        resolvedPath: imp.resolvedPath,
+        resolvedModule: imp.resolvedModule,
+      });
+    }
+  }
+
+  // Build local symbol lookup: name → true
+  const localSymbols = new Set(symbols.map(s => s.name));
+
+  // Find each symbol's AST node by matching line number, then walk its body
+  for (const sym of symbols) {
+    if (sym.kind !== 'function' && sym.kind !== 'method') continue;
+
+    const bodyNode = findSymbolBody(rootNode, sym);
+    if (!bodyNode) continue;
+
+    const calls = [];
+    const seen = new Set();
+    walkForCalls(bodyNode, calls, seen, importLookup, localSymbols, sym.name);
+    if (calls.length > 0) {
+      callMap.set(sym.name, calls);
+    }
+  }
+
+  return callMap;
+}
+
+function findSymbolBody(rootNode, sym) {
+  // Walk the AST to find a function node at the symbol's line
+  const targetLine = sym.line - 1; // sym.line is 1-indexed
+
+  function search(node) {
+    if (node.startPosition.row === targetLine) {
+      // Found a node at the right line — look for body
+      const body = findBody(node);
+      if (body) return body;
+    }
+
+    for (let i = 0; i < node.childCount; i++) {
+      const child = node.child(i);
+      // Only recurse into nodes that span our target line
+      if (child.startPosition.row <= targetLine && child.endPosition.row >= targetLine) {
+        const result = search(child);
+        if (result) return result;
+      }
+    }
+    return null;
+  }
+
+  function findBody(node) {
+    // Direct body field
+    const body = node.childForFieldName('body');
+    if (body) return body;
+
+    // For lexical_declaration → variable_declarator → value (arrow_function) → body
+    for (let i = 0; i < node.childCount; i++) {
+      const child = node.child(i);
+      if (child.type === 'variable_declarator') {
+        const value = child.childForFieldName('value');
+        if (value && (value.type === 'arrow_function' || value.type === 'function')) {
+          return value.childForFieldName('body') || value;
+        }
+      }
+    }
+    return null;
+  }
+
+  return search(rootNode);
+}
+
+function walkForCalls(node, calls, seen, importLookup, localSymbols, callerName) {
+  if (node.type === 'call_expression' || node.type === 'new_expression') {
+    const callee = node.type === 'new_expression'
+      ? node.children.find(c => c.type === 'identifier' || c.type === 'member_expression')
+      : node.childForFieldName('function') || node.children[0];
+
+    if (callee) {
+      const callInfo = resolveCallee(callee, importLookup, localSymbols);
+      if (callInfo && callInfo.name !== callerName) {
+        const key = `${callInfo.name}:${node.startPosition.row}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          calls.push({
+            name: callInfo.name,
+            resolvedFile: callInfo.resolvedFile,
+            resolvedModule: callInfo.resolvedModule,
+            line: node.startPosition.row + 1,
+            isExternal: callInfo.isExternal,
+          });
+        }
+      }
+    }
+  }
+
+  for (let i = 0; i < node.childCount; i++) {
+    walkForCalls(node.child(i), calls, seen, importLookup, localSymbols, callerName);
+  }
+}
+
+function resolveCallee(node, importLookup, localSymbols) {
+  // Built-ins to skip
+  const SKIP = new Set(['console', 'process', 'JSON', 'Math', 'Object', 'Array', 'Promise', 'Error', 'Date', 'Map', 'Set', 'RegExp', 'parseInt', 'parseFloat', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'require']);
+
+  if (node.type === 'identifier') {
+    const name = node.text;
+    if (SKIP.has(name)) return null;
+
+    // Check if it's an imported symbol
+    const imp = importLookup.get(name);
+    if (imp) {
+      return {
+        name,
+        resolvedFile: imp.resolvedPath,
+        resolvedModule: imp.resolvedModule,
+        isExternal: imp.resolvedModule === 'external' && !imp.source?.startsWith('@/'),
+      };
+    }
+    // Check if it's a local symbol
+    if (localSymbols.has(name)) {
+      return { name, resolvedFile: null, resolvedModule: null, isExternal: false };
+    }
+    // Unknown — might be resolved by callgraph builder via symbol index
+    return null;
+  }
+
+  if (node.type === 'member_expression') {
+    const obj = node.childForFieldName('object');
+    const prop = node.childForFieldName('property');
+    if (!prop) return null;
+
+    const methodName = prop.text;
+
+    // Skip known built-ins
+    if (obj?.type === 'identifier' && SKIP.has(obj.text)) return null;
+
+    // this.method() or super.method()
+    if (obj?.type === 'this' || obj?.type === 'super') {
+      return { name: methodName, resolvedFile: null, resolvedModule: null, isExternal: false };
+    }
+
+    // imported.method() — check if object is an imported namespace
+    if (obj?.type === 'identifier') {
+      const imp = importLookup.get(obj.text);
+      if (imp) {
+        return {
+          name: `${obj.text}.${methodName}`,
+          resolvedFile: imp.resolvedPath,
+          resolvedModule: imp.resolvedModule,
+          isExternal: imp.resolvedModule === 'external' && !imp.source?.startsWith('@/'),
+        };
+      }
+    }
+
+    return null;
+  }
+
+  return null;
+}
+
+function resolveImport(importPath, fromFile, projectRoot, fileIndex) {
+  // Try tsconfig path aliases first (e.g. @/foo, ~/bar, custom paths)
+  if (!importPath.startsWith(".") && !importPath.startsWith("/") && fileIndex?.tsconfig) {
+    const aliased = resolvePathAlias(importPath, projectRoot, fileIndex.tsconfig, fileIndex);
+    if (aliased) return aliased;
+  }
+
   if (!importPath.startsWith(".") && !importPath.startsWith("/")) {
     return { resolvedPath: null, resolvedModule: "external" };
   }
@@ -284,25 +508,71 @@ function resolveImport(importPath, fromFile, projectRoot) {
   if (rel.startsWith("..")) {
     return { resolvedPath: null, resolvedModule: "external" };
   }
-  return { resolvedPath: rel, resolvedModule: getModuleName(rel) };
+
+  // Use file index for exact resolution if available
+  if (fileIndex) {
+    const exact = fileIndex.resolve(rel);
+    if (exact) {
+      return { resolvedPath: exact, resolvedModule: getModuleFromRelPath(exact) };
+    }
+  }
+
+  return { resolvedPath: rel, resolvedModule: getModuleFromRelPath(rel) };
 }
 
-function getModuleName(relPath) {
-  // Find the first meaningful directory
-  const parts = relPath.split("/");
-  // Skip src/lib/app prefixes
-  const skipDirs = new Set(["src", "lib", "app", "source", "packages"]);
-  let start = 0;
-  while (start < parts.length - 1 && skipDirs.has(parts[start])) {
-    start++;
+/**
+ * Resolve a tsconfig path alias to an actual file.
+ * Handles patterns like: "@/*" → ["src/*"], "~/*" → ["src/*"]
+ */
+function resolvePathAlias(importPath, projectRoot, tsconfig, fileIndex) {
+  const { paths, baseUrl } = tsconfig;
+  if (!paths) return null;
+
+  const base = baseUrl ? resolve(projectRoot, baseUrl) : projectRoot;
+
+  for (const [pattern, targets] of Object.entries(paths)) {
+    // Convert tsconfig glob pattern to a match check
+    // e.g. "@/*" matches "@/foo/bar", captures "foo/bar"
+    if (pattern.endsWith("/*")) {
+      const prefix = pattern.slice(0, -2);
+      if (importPath.startsWith(prefix + "/")) {
+        const rest = importPath.slice(prefix.length + 1);
+        for (const target of targets) {
+          if (target.endsWith("/*")) {
+            const targetDir = target.slice(0, -2);
+            const resolved = resolve(base, targetDir, rest)
+              .replace(/\.(js|ts|tsx|jsx|mjs|cjs)$/, "");
+            const rel = relative(projectRoot, resolved);
+            if (!rel.startsWith("..") && fileIndex) {
+              const exact = fileIndex.resolve(rel);
+              if (exact) {
+                return { resolvedPath: exact, resolvedModule: getModuleFromRelPath(exact) };
+              }
+            }
+          }
+        }
+      }
+    } else if (pattern === importPath) {
+      // Exact match (no wildcard)
+      for (const target of targets) {
+        const resolved = resolve(base, target)
+          .replace(/\.(js|ts|tsx|jsx|mjs|cjs)$/, "");
+        const rel = relative(projectRoot, resolved);
+        if (!rel.startsWith("..") && fileIndex) {
+          const exact = fileIndex.resolve(rel);
+          if (exact) {
+            return { resolvedPath: exact, resolvedModule: getModuleFromRelPath(exact) };
+          }
+        }
+      }
+    }
   }
-  if (start >= parts.length - 1) return "root";
-  return parts[start];
+
+  return null;
 }
 
 function getModulePath(filePath, projectRoot) {
-  const rel = relative(projectRoot, filePath);
-  return getModuleName(rel);
+  return sharedGetModuleName(filePath, projectRoot);
 }
 
 export default {
@@ -310,6 +580,7 @@ export default {
   loadGrammar,
   extractSymbols,
   extractImports,
+  extractCalls,
   resolveImport,
   getModulePath,
 };

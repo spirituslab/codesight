@@ -8,8 +8,9 @@ PORT="${2:-8080}"
 echo "=== codesight ==="
 echo ""
 
-# Run analysis
-node "$SCRIPT_DIR/analyze.mjs" "$PROJECT_PATH"
+# Run analysis (pass through remaining args for --llm etc.)
+shift 2>/dev/null || true
+node "$SCRIPT_DIR/analyze.mjs" "$PROJECT_PATH" "$@"
 
 # Kill any existing server on the port
 lsof -ti :"$PORT" 2>/dev/null | xargs -r kill 2>/dev/null || true
@@ -18,7 +19,7 @@ lsof -ti :"$PORT" 2>/dev/null | xargs -r kill 2>/dev/null || true
 echo ""
 echo "Starting server on http://localhost:$PORT"
 cd "$SCRIPT_DIR"
-python3 -m http.server "$PORT" -d web/ &
+node serve.mjs "$PORT" &
 SERVER_PID=$!
 echo "$SERVER_PID" > "$SCRIPT_DIR/.server.pid"
 

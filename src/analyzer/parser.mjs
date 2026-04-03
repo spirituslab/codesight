@@ -31,5 +31,5 @@ export function parseFile(content, langId) {
   const symbols = lang.extractSymbols(rootNode, content);
   const imports = lang.extractImports(rootNode, content);
 
-  return { symbols, imports };
+  return { symbols, imports, rootNode, content };
 }

@@ -8,15 +8,30 @@
   },
   "scripts": {
     "analyze": "node analyze.mjs",
-    "start": "./start.sh"
+    "serve": "node serve.mjs",
+    "start": "./start.sh",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
+  "files": [
+    "analyze.mjs",
+    "serve.mjs",
+    "src/",
+    "web/"
+  ],
   "keywords": [
     "code",
     "visualization",
     "static-analysis",
-    "tree-sitter"
+    "tree-sitter",
+    "codebase",
+    "architecture",
+    "call-graph"
   ],
   "license": "MIT",
+  "devDependencies": {
+    "vitest": "^3.1.1"
+  },
   "dependencies": {
     "tree-sitter": "^0.21.1",
     "tree-sitter-javascript": "^0.21.4",

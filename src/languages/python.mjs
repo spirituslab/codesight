@@ -1,4 +1,5 @@
 import { resolve, dirname, relative } from "path";
+import { getModuleName as sharedGetModuleName, getModuleFromRelPath } from "../analyzer/modules.mjs";
 
 function loadGrammar(require) {
   return require("tree-sitter-python");
@@ -9,21 +10,70 @@ function extractSymbols(rootNode, source) {
   const lines = source.split("\n");
 
   for (const node of rootNode.children) {
+    let defNode = node;
+    let decoratedNode = null;
     if (node.type === "decorated_definition") {
-      const inner = node.children.find(
+      defNode = node.children.find(
         c => c.type === "function_definition" || c.type === "class_definition"
       );
-      if (inner) {
-        const sym = extractDef(inner, lines, node);
-        if (sym) symbols.push(sym);
+      decoratedNode = node;
+      if (!defNode) continue;
+    }
+
+    const sym = extractDef(defNode, lines, decoratedNode);
+    if (sym) {
+      symbols.push(sym);
+      // Extract class methods as separate symbols for call graph resolution
+      if (sym.kind === "class") {
+        const methods = extractClassMethods(defNode, lines, sym.name);
+        symbols.push(...methods);
       }
-    } else {
-      const sym = extractDef(node, lines, null);
-      if (sym) symbols.push(sym);
     }
   }
 
   return symbols;
+}
+
+function extractClassMethods(classNode, lines, className) {
+  const methods = [];
+  const body = classNode.childForFieldName("body");
+  if (!body) return methods;
+
+  for (const child of body.children) {
+    let methodNode = child;
+    let decoratedNode = null;
+    if (child.type === "decorated_definition") {
+      methodNode = child.children.find(c => c.type === "function_definition");
+      decoratedNode = child;
+      if (!methodNode) continue;
+    }
+    if (methodNode.type !== "function_definition") continue;
+
+    const name = methodNode.childForFieldName("name")?.text;
+    if (!name || name === "__init__" || name.startsWith("_")) continue;
+
+    const parameters = extractParameters(methodNode.childForFieldName("parameters"));
+    const returnType = methodNode.childForFieldName("return_type")?.text?.replace(/^\s*->\s*/, "") || null;
+    const comment = extractDocstring(methodNode) || extractComment(decoratedNode || methodNode, lines);
+    const startLine = (decoratedNode || methodNode).startPosition.row;
+    const endLine = methodNode.endPosition.row;
+    const source = lines.slice(startLine, endLine + 1).join("\n");
+
+    methods.push({
+      name,
+      kind: "method",
+      exported: false,
+      className,
+      signature: buildFnSignature(methodNode, lines, decoratedNode),
+      parameters,
+      returnType,
+      comment,
+      source,
+      line: startLine + 1,
+      usedBy: [],
+    });
+  }
+  return methods;
 }
 
 function extractDef(node, lines, decoratedNode) {
@@ -210,7 +260,155 @@ function extractImports(rootNode, _source) {
   return imports;
 }
 
-function resolveImport(importPath, fromFile, projectRoot) {
+const PYTHON_BUILTINS = new Set([
+  'print', 'len', 'range', 'enumerate', 'zip', 'map', 'filter', 'sorted',
+  'reversed', 'any', 'all', 'min', 'max', 'sum', 'abs', 'round', 'hash',
+  'id', 'repr', 'dir', 'vars', 'getattr', 'setattr', 'hasattr', 'delattr',
+  'callable', 'super', 'property', 'staticmethod', 'classmethod',
+  'open', 'input', 'iter', 'next', 'format', 'chr', 'ord', 'hex', 'oct',
+  'bin', 'pow', 'divmod', 'isinstance', 'issubclass', 'type',
+  'str', 'int', 'float', 'bool', 'list', 'dict', 'set', 'tuple', 'bytes',
+  'bytearray', 'frozenset', 'object', 'complex', 'memoryview',
+  'Exception', 'ValueError', 'TypeError', 'KeyError', 'IndexError',
+  'AttributeError', 'RuntimeError', 'StopIteration', 'NotImplementedError',
+  'OSError', 'IOError', 'FileNotFoundError', 'ImportError', 'NameError',
+]);
+
+/**
+ * Extract function calls from symbol bodies via tree-sitter.
+ */
+function extractCalls(rootNode, symbols, fileImports) {
+  const callMap = new Map();
+
+  const importLookup = new Map();
+  for (const imp of fileImports) {
+    for (const sym of imp.symbols) {
+      importLookup.set(sym, {
+        source: imp.source,
+        resolvedPath: imp.resolvedPath,
+        resolvedModule: imp.resolvedModule,
+      });
+    }
+  }
+
+  const localSymbols = new Set(symbols.map(s => s.name));
+
+  for (const sym of symbols) {
+    if (sym.kind !== 'function' && sym.kind !== 'method') continue;
+
+    const bodyNode = findPythonBody(rootNode, sym);
+    if (!bodyNode) continue;
+
+    const calls = [];
+    const seen = new Set();
+    walkPythonCalls(bodyNode, calls, seen, importLookup, localSymbols, sym.name);
+    if (calls.length > 0) {
+      callMap.set(sym.name, calls);
+    }
+  }
+
+  return callMap;
+}
+
+function findPythonBody(rootNode, sym) {
+  const targetLine = sym.line - 1;
+
+  function search(node) {
+    if (node.type === 'function_definition' && node.startPosition.row === targetLine) {
+      return node.childForFieldName('body');
+    }
+    // Check decorated definitions
+    if (node.type === 'decorated_definition' && node.startPosition.row === targetLine) {
+      const inner = node.children.find(c => c.type === 'function_definition');
+      if (inner) return inner.childForFieldName('body');
+    }
+
+    for (let i = 0; i < node.childCount; i++) {
+      const child = node.child(i);
+      if (child.startPosition.row <= targetLine && child.endPosition.row >= targetLine) {
+        const result = search(child);
+        if (result) return result;
+      }
+    }
+    return null;
+  }
+
+  return search(rootNode);
+}
+
+function walkPythonCalls(node, calls, seen, importLookup, localSymbols, callerName) {
+  if (node.type === 'call') {
+    const funcNode = node.childForFieldName('function');
+    if (funcNode) {
+      const callInfo = resolvePythonCallee(funcNode, importLookup, localSymbols);
+      if (callInfo && callInfo.name !== callerName) {
+        const key = `${callInfo.name}:${node.startPosition.row}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          calls.push({
+            name: callInfo.name,
+            resolvedFile: callInfo.resolvedFile,
+            resolvedModule: callInfo.resolvedModule,
+            line: node.startPosition.row + 1,
+            isExternal: callInfo.isExternal,
+          });
+        }
+      }
+    }
+  }
+
+  for (let i = 0; i < node.childCount; i++) {
+    walkPythonCalls(node.child(i), calls, seen, importLookup, localSymbols, callerName);
+  }
+}
+
+function resolvePythonCallee(node, importLookup, localSymbols) {
+  if (node.type === 'identifier') {
+    const name = node.text;
+    if (PYTHON_BUILTINS.has(name)) return null;
+    const imp = importLookup.get(name);
+    if (imp) {
+      return {
+        name,
+        resolvedFile: imp.resolvedPath,
+        resolvedModule: imp.resolvedModule,
+        isExternal: imp.resolvedModule === 'external',
+      };
+    }
+    if (localSymbols.has(name)) {
+      return { name, resolvedFile: null, resolvedModule: null, isExternal: false };
+    }
+    return null;
+  }
+
+  if (node.type === 'attribute') {
+    const obj = node.childForFieldName('object');
+    const attr = node.childForFieldName('attribute');
+    if (!attr) return null;
+
+    if (obj?.type === 'identifier') {
+      // self.method()
+      if (obj.text === 'self' || obj.text === 'cls') {
+        return { name: attr.text, resolvedFile: null, resolvedModule: null, isExternal: false };
+      }
+      // imported_module.func()
+      const imp = importLookup.get(obj.text);
+      if (imp) {
+        return {
+          name: `${obj.text}.${attr.text}`,
+          resolvedFile: imp.resolvedPath,
+          resolvedModule: imp.resolvedModule,
+          isExternal: imp.resolvedModule === 'external',
+        };
+      }
+    }
+    return null;
+  }
+
+  return null;
+}
+
+function resolveImport(importPath, fromFile, projectRoot, fileIndex) {
   // Python imports: dots = relative
   if (importPath.startsWith(".")) {
     const dots = importPath.match(/^\.+/)[0].length;
@@ -220,34 +418,31 @@ function resolveImport(importPath, fromFile, projectRoot) {
     const resolved = resolve(base, modulePart);
     const rel = relative(projectRoot, resolved);
     if (rel.startsWith("..")) return { resolvedPath: null, resolvedModule: "external" };
-    return { resolvedPath: rel, resolvedModule: getModuleName(rel) };
+
+    if (fileIndex) {
+      const exact = fileIndex.resolve(rel);
+      if (exact) return { resolvedPath: exact, resolvedModule: getModuleFromRelPath(exact) };
+    }
+    return { resolvedPath: rel, resolvedModule: getModuleFromRelPath(rel) };
   }
 
-  // Absolute imports — check if it maps to a local directory
+  // Absolute imports — check if it maps to a local file/package
   const parts = importPath.split(".");
   const localPath = resolve(projectRoot, parts.join("/"));
   const rel = relative(projectRoot, localPath);
   if (!rel.startsWith("..")) {
-    return { resolvedPath: rel, resolvedModule: getModuleName(rel) };
+    if (fileIndex) {
+      const exact = fileIndex.resolve(rel);
+      if (exact) return { resolvedPath: exact, resolvedModule: getModuleFromRelPath(exact) };
+    }
+    return { resolvedPath: rel, resolvedModule: getModuleFromRelPath(rel) };
   }
 
   return { resolvedPath: null, resolvedModule: "external" };
 }
 
-function getModuleName(relPath) {
-  const parts = relPath.split("/");
-  const skipDirs = new Set(["src", "lib", "app", "source"]);
-  let start = 0;
-  while (start < parts.length - 1 && skipDirs.has(parts[start])) {
-    start++;
-  }
-  if (start >= parts.length - 1) return "root";
-  return parts[start];
-}
-
 function getModulePath(filePath, projectRoot) {
-  const rel = relative(projectRoot, filePath);
-  return getModuleName(rel);
+  return sharedGetModuleName(filePath, projectRoot);
 }
 
 export default {
@@ -255,6 +450,7 @@ export default {
   loadGrammar,
   extractSymbols,
   extractImports,
+  extractCalls,
   resolveImport,
   getModulePath,
 };
