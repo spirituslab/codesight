@@ -26,16 +26,26 @@
 </head>
 <body>
 <cs-app>
-  <div slot="sidebar" id="sidebar-slot">
-    <!-- Sidebar components will render here -->
-  </div>
-  <div slot="graph" id="graph-slot" style="width:100%;height:100%;position:relative;">
-    <!-- Graph component will render here -->
-  </div>
-  <div slot="chat" id="chat-slot">
-    <!-- Chat component will render here -->
-  </div>
+  <cs-sidebar slot="sidebar">
+    <cs-explorer slot="explorer"></cs-explorer>
+    <cs-search-panel slot="search"></cs-search-panel>
+    <cs-tour-panel slot="tours"></cs-tour-panel>
+  </cs-sidebar>
+  <cs-graph slot="graph"></cs-graph>
+  <cs-chat slot="chat"></cs-chat>
 </cs-app>
-<script type="module" src="src/components/cs-app.js"></script>
+<cs-global-search></cs-global-search>
+<cs-code-popup></cs-code-popup>
+<script type="module">
+  import './src/components/cs-app.js';
+  import './src/components/cs-graph.js';
+  import './src/components/cs-sidebar.js';
+  import './src/components/cs-chat.js';
+  import './src/components/cs-global-search.js';
+  import './src/components/cs-code-popup.js';
+  import './src/panels/cs-explorer.js';
+  import './src/panels/cs-search-panel.js';
+  import './src/panels/cs-tour-panel.js';
+</script>
 </body>
 </html>
