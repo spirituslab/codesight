@@ -34,10 +34,8 @@ export class CsSidebar extends LitElement {
   constructor() {
     super();
     this._tab = 'explorer';
-    store.addEventListener('state-changed', (e) => {
-      if (e.detail.key === 'sidebarTab') {
-        this._tab = store.state.sidebarTab;
-      }
+    store.addEventListener('state-changed', () => {
+      this._tab = store.state.sidebarTab;
     });
   }
 
