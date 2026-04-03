@@ -33,8 +33,8 @@ export class CsStatusBar extends LitElement {
   constructor() {
     super();
     this._data = null;
-    store.addEventListener('state-changed', (e) => {
-      if (e.detail.key === 'DATA') this._data = store.state.DATA;
+    store.addEventListener('state-changed', () => {
+      if (store.state.DATA !== this._data) this._data = store.state.DATA;
     });
   }
 

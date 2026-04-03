@@ -86,10 +86,9 @@ export class CsApp extends LitElement {
     super();
     this._sidebarCollapsed = false;
     this._chatOpen = false;
-    store.addEventListener('state-changed', (e) => {
-      const { key } = e.detail;
-      if (key === 'sidebarCollapsed') this._sidebarCollapsed = store.state.sidebarCollapsed;
-      if (key === 'chatOpen') this._chatOpen = store.state.chatOpen;
+    store.addEventListener('state-changed', () => {
+      this._sidebarCollapsed = store.state.sidebarCollapsed;
+      this._chatOpen = store.state.chatOpen;
     });
   }
 
