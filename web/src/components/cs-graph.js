@@ -162,6 +162,7 @@ export class CsGraph extends LitElement {
     this._cyIdea = null;
     this._hasIdeas = false;
     this._mappingRAF = null;
+    this._rendering = false;
     this._boundStoreHandler = this._onStoreChanged.bind(this);
   }
 
@@ -229,15 +230,21 @@ export class CsGraph extends LitElement {
   }
 
   _syncViewToState() {
-    const { currentLevel, currentModule, currentFile, currentSubdir } = store.state;
-    if (currentLevel === 'modules') {
-      this._renderModuleView();
-    } else if (currentLevel === 'symbols' && currentFile) {
-      this._buildSymbolGraph(currentFile);
-    } else if (currentLevel === 'files' && currentModule) {
-      this._renderFileView(currentModule, currentSubdir);
-    } else if (currentLevel === 'subdirs' && currentModule) {
-      this._drillToModule(currentModule);
+    if (this._rendering) return;
+    this._rendering = true;
+    try {
+      const { currentLevel, currentModule, currentFile, currentSubdir } = store.state;
+      if (currentLevel === 'modules') {
+        this._renderModuleView();
+      } else if (currentLevel === 'symbols' && currentFile) {
+        this._buildSymbolGraph(currentFile);
+      } else if (currentLevel === 'files' && currentModule) {
+        this._renderFileView(currentModule, currentSubdir);
+      } else if (currentLevel === 'subdirs' && currentModule) {
+        this._drillToModule(currentModule);
+      }
+    } finally {
+      this._rendering = false;
     }
   }
 

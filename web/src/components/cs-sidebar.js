@@ -27,7 +27,6 @@ export class CsSidebar extends LitElement {
     }
     .content::-webkit-scrollbar { width: 6px; }
     .content::-webkit-scrollbar-thumb { background: var(--ctp-surface1); border-radius: 3px; }
-    ::slotted(*) { display: none; }
   `];
 
   static properties = { _tab: { state: true } };
@@ -38,17 +37,7 @@ export class CsSidebar extends LitElement {
     store.addEventListener('state-changed', (e) => {
       if (e.detail.key === 'sidebarTab') {
         this._tab = store.state.sidebarTab;
-        this._showActiveSlot();
       }
-    });
-  }
-
-  firstUpdated() { this._showActiveSlot(); }
-
-  _showActiveSlot() {
-    const slots = this.querySelectorAll('[slot]');
-    slots.forEach(el => {
-      el.style.display = el.slot === this._tab ? '' : 'none';
     });
   }
 
