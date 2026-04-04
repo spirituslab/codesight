@@ -86,7 +86,18 @@ export class CsChat extends LitElement {
     this._sending = false;
     this._history = [];
     this._updateContext();
-    store.addEventListener('state-changed', () => this._updateContext());
+    this._boundStoreHandler = this._updateContext.bind(this);
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    store.addEventListener('state-changed', this._boundStoreHandler);
+    this._updateContext();
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    store.removeEventListener('state-changed', this._boundStoreHandler);
   }
 
   _updateContext() {

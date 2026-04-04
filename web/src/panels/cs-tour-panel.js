@@ -174,21 +174,28 @@ export class CsTourPanel extends LitElement {
     this._data = null;
     this._activeTour = null;
     this._activeTourStep = 0;
-
-    store.addEventListener('state-changed', () => {
-      const s = store.state;
-      this._data = s.DATA;
-      this._activeTour = s.activeTour;
-      this._activeTourStep = s.activeTourStep;
-    });
+    this._boundStoreHandler = this._onStoreChanged.bind(this);
   }
 
-  connectedCallback() {
-    super.connectedCallback();
+  _onStoreChanged() {
     const s = store.state;
     this._data = s.DATA;
     this._activeTour = s.activeTour;
     this._activeTourStep = s.activeTourStep;
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    store.addEventListener('state-changed', this._boundStoreHandler);
+    const s = store.state;
+    this._data = s.DATA;
+    this._activeTour = s.activeTour;
+    this._activeTourStep = s.activeTourStep;
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    store.removeEventListener('state-changed', this._boundStoreHandler);
   }
 
   _startTour(tourId) {

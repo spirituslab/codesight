@@ -38,7 +38,18 @@ export class CsBreadcrumb extends LitElement {
   constructor() {
     super();
     this._update();
-    store.addEventListener('state-changed', () => this._update());
+    this._boundStoreHandler = this._update.bind(this);
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    store.addEventListener('state-changed', this._boundStoreHandler);
+    this._update();
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    store.removeEventListener('state-changed', this._boundStoreHandler);
   }
 
   _update() {
@@ -46,6 +57,7 @@ export class CsBreadcrumb extends LitElement {
     this._module = store.state.currentModule;
     this._subdir = store.state.currentSubdir;
     this._file = store.state.currentFile;
+    this._activeGroup = store.state.activeGroup;
   }
 
   _nav(action, module, subdir) {
@@ -59,7 +71,12 @@ export class CsBreadcrumb extends LitElement {
     const projName = store.state.DATA?.projectName || 'Project';
     const parts = [];
 
-    if (this._level === 'modules') {
+    if (this._level === 'modules' && this._activeGroup) {
+      // Inside a module group drill-down
+      parts.push(html`<span @click=${() => this._nav('modules')}>${projName}</span>`);
+      parts.push(html`<span class="sep">/</span>`);
+      parts.push(html`<span class="active">${this._activeGroup.name}/</span>`);
+    } else if (this._level === 'modules') {
       parts.push(html`<span class="active">${projName}</span>`);
     } else {
       parts.push(html`<span @click=${() => this._nav('modules')}>${projName}</span>`);

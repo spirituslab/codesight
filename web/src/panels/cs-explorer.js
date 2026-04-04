@@ -345,6 +345,7 @@ export class CsExplorer extends LitElement {
     _module: { state: true },
     _subdir: { state: true },
     _file: { state: true },
+    _activeGroup: { state: true },
     _selectedSymbol: { state: true },
     _selectedImport: { state: true },
   };
@@ -356,32 +357,46 @@ export class CsExplorer extends LitElement {
     this._module = null;
     this._subdir = null;
     this._file = null;
+    this._activeGroup = null;
     this._selectedSymbol = null;
     this._selectedImport = null;
 
-    store.addEventListener('state-changed', () => {
-      const s = store.state;
-      this._data = s.DATA;
-      this._level = s.currentLevel;
-      this._module = s.currentModule;
-      this._subdir = s.currentSubdir;
-      if (s.currentFile !== this._file) {
-        this._file = s.currentFile;
-        // Reset detail views when file changes
-        this._selectedSymbol = null;
-        this._selectedImport = null;
-      }
-    });
+    this._boundStoreHandler = this._onStoreChanged.bind(this);
+  }
+
+  _onStoreChanged() {
+    const s = store.state;
+    this._data = s.DATA;
+    this._level = s.currentLevel;
+    this._module = s.currentModule;
+    this._subdir = s.currentSubdir;
+    this._activeGroup = s.activeGroup;
+    if (s.currentFile !== this._file) {
+      this._file = s.currentFile;
+      this._selectedSymbol = null;
+      this._selectedImport = null;
+    }
+    // Sync symbol selection from graph clicks
+    if (s.selectedSymbol !== undefined && s.selectedSymbol !== null && s.selectedSymbol !== this._selectedSymbol) {
+      this._selectedSymbol = s.selectedSymbol;
+      this._selectedImport = null;
+    }
   }
 
   connectedCallback() {
     super.connectedCallback();
+    store.addEventListener('state-changed', this._boundStoreHandler);
     const s = store.state;
     this._data = s.DATA;
     this._level = s.currentLevel;
     this._module = s.currentModule;
     this._subdir = s.currentSubdir;
     this._file = s.currentFile;
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    store.removeEventListener('state-changed', this._boundStoreHandler);
   }
 
   // ---- Helpers ----
@@ -459,6 +474,12 @@ export class CsExplorer extends LitElement {
     this._dispatchNav('navigate-to-module', { module: modName });
   }
 
+  _onGroupClick(groupName) {
+    this._selectedSymbol = null;
+    this._selectedImport = null;
+    this._dispatchNav('navigate-to-group', { group: groupName });
+  }
+
   _onSubdirClick(modName, subdir) {
     this._selectedSymbol = null;
     this._selectedImport = null;
@@ -478,6 +499,7 @@ export class CsExplorer extends LitElement {
   _onExportClick(sym) {
     this._selectedImport = null;
     this._selectedSymbol = sym;
+    store.set('selectedSymbol', sym);
   }
 
   _onImportClick(imp) {
@@ -488,6 +510,7 @@ export class CsExplorer extends LitElement {
   _backToFileOverview() {
     this._selectedSymbol = null;
     this._selectedImport = null;
+    store.set('selectedSymbol', null);
   }
 
   _onShowCode(sym, file) {
@@ -508,7 +531,7 @@ export class CsExplorer extends LitElement {
     }
 
     switch (this._level) {
-      case 'modules': return this._renderModuleOverview();
+      case 'modules': return this._activeGroup ? this._renderGroupOverview() : this._renderModuleOverview();
       case 'subdirs': return this._renderSubdirView();
       case 'files': return this._renderFileList();
       case 'symbols': return this._renderSymbolView();
@@ -518,12 +541,49 @@ export class CsExplorer extends LitElement {
 
   // ---- 1. Module overview ----
 
+  _getGroupedModules(allModules) {
+    const groups = new Map();
+    for (const mod of allModules) {
+      const slashIdx = mod.name.indexOf('/');
+      const parent = slashIdx !== -1 ? mod.name.substring(0, slashIdx) : null;
+      if (parent) {
+        if (!groups.has(parent)) groups.set(parent, { modules: [], fileCount: 0, lineCount: 0 });
+        const g = groups.get(parent);
+        g.modules.push(mod);
+        g.fileCount += mod.fileCount;
+        g.lineCount += mod.lineCount;
+      } else {
+        // Standalone module — check if anything else groups under it
+        if (!groups.has(mod.name)) groups.set(mod.name, { modules: [], fileCount: 0, lineCount: 0 });
+        const g = groups.get(mod.name);
+        g.standalone = mod;
+        g.fileCount += mod.fileCount;
+        g.lineCount += mod.lineCount;
+      }
+    }
+    // Sort sub-modules within each group by size
+    for (const g of groups.values()) {
+      g.modules.sort((a, b) => b.lineCount - a.lineCount);
+    }
+    // Convert to sorted array
+    return [...groups.entries()]
+      .map(([name, g]) => ({
+        name,
+        isGroup: g.modules.length > 0,
+        standalone: g.standalone || null,
+        subModules: g.modules,
+        fileCount: g.fileCount,
+        lineCount: g.lineCount,
+      }))
+      .sort((a, b) => b.lineCount - a.lineCount);
+  }
+
   _renderModuleOverview() {
     const allModules = this._getAllModules();
     const allFiles = this._getAllFilesFlat();
     const total = allModules.reduce((s, m) => s + m.lineCount, 0);
     const totalFiles = allModules.reduce((s, m) => s + m.fileCount, 0);
-    const sorted = [...allModules].sort((a, b) => b.lineCount - a.lineCount);
+    const grouped = this._getGroupedModules(allModules);
 
     const entryFiles = allFiles.filter(f => f.isEntryPoint);
     const keyFiles = this._data.keyFiles?.slice(0, 10) || [];
@@ -548,12 +608,26 @@ export class CsExplorer extends LitElement {
 
       <div class="section-title">Modules by size</div>
       <ul class="file-list">
-        ${sorted.map(mod => html`
-          <li @click=${() => this._onModuleClick(mod.name)}>
-            <span><span class="dot" style="background:${getColor(mod.name)}"></span>${mod.name}</span>
-            <span class="lines">${mod.fileCount} files, ${(mod.lineCount / 1000).toFixed(1)}k lines</span>
-          </li>
-        `)}
+        ${grouped.map(g => {
+          if (!g.isGroup) {
+            // Single module, no sub-modules — navigate directly
+            const mod = g.standalone;
+            return html`
+              <li @click=${() => this._onModuleClick(mod.name)}>
+                <span><span class="dot" style="background:${getColor(mod.name)}"></span>${mod.name}</span>
+                <span class="lines">${mod.fileCount} files, ${(mod.lineCount / 1000).toFixed(1)}k lines</span>
+              </li>
+            `;
+          }
+          // Group with sub-modules — show group drill-down in graph
+          const subCount = g.subModules.length + (g.standalone ? 1 : 0);
+          return html`
+            <li @click=${() => this._onGroupClick(g.name)}>
+              <span><span class="dot" style="background:${getColor(g.name)}"></span>${g.name}/</span>
+              <span class="lines">${subCount} modules, ${(g.lineCount / 1000).toFixed(1)}k lines</span>
+            </li>
+          `;
+        })}
       </ul>
 
       ${entryFiles.length > 0 ? html`
@@ -588,6 +662,46 @@ export class CsExplorer extends LitElement {
           </div>
         `)}
       ` : nothing}
+    `;
+  }
+
+  // ---- 1b. Group overview (sub-modules of a group) ----
+
+  _renderGroupOverview() {
+    const g = this._activeGroup;
+    if (!g) return this._renderModuleOverview();
+
+    const subModules = [...g.modules];
+    if (g.standalone) subModules.push(g.standalone);
+    subModules.sort((a, b) => b.lineCount - a.lineCount);
+
+    const totalFiles = subModules.reduce((s, m) => s + m.fileCount, 0);
+    const totalLines = subModules.reduce((s, m) => s + m.lineCount, 0);
+
+    return html`
+      <h2>${g.name}/</h2>
+      <div class="subtitle">${subModules.length} sub-modules</div>
+
+      <div class="stats">
+        <div class="stat"><div class="val">${subModules.length}</div><div class="label">Modules</div></div>
+        <div class="stat"><div class="val">${totalFiles}</div><div class="label">Files</div></div>
+        <div class="stat"><div class="val">${(totalLines / 1000).toFixed(0)}k</div><div class="label">Lines</div></div>
+      </div>
+
+      <div class="section-title">Sub-modules</div>
+      <ul class="file-list">
+        ${subModules.map(mod => {
+          const label = mod.name.includes('/') ? mod.name.split('/').slice(1).join('/') : mod.name;
+          return html`
+            <li @click=${() => this._onModuleClick(mod.name)}>
+              <span><span class="dot" style="background:${getColor(mod.name)}"></span>${label}</span>
+              <span class="lines">${mod.fileCount} files, ${(mod.lineCount / 1000).toFixed(1)}k lines</span>
+            </li>
+          `;
+        })}
+      </ul>
+
+      <a class="back-link" @click=${() => this._dispatchNav('navigate', { action: 'modules' })}>&larr; Back to all modules</a>
     `;
   }
 

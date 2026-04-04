@@ -86,10 +86,19 @@ export class CsApp extends LitElement {
     super();
     this._sidebarCollapsed = false;
     this._chatOpen = false;
-    store.addEventListener('state-changed', () => {
-      this._sidebarCollapsed = store.state.sidebarCollapsed;
-      this._chatOpen = store.state.chatOpen;
-    });
+    this._boundStoreHandler = this._onStoreChanged.bind(this);
+    this._docListeners = [];
+  }
+
+  _onStoreChanged() {
+    this._sidebarCollapsed = store.state.sidebarCollapsed;
+    this._chatOpen = store.state.chatOpen;
+  }
+
+  _addDocListener(event, handler) {
+    const bound = handler.bind(this);
+    document.addEventListener(event, bound);
+    this._docListeners.push({ event, handler: bound });
   }
 
   // ─── Element references ──────────────────────────────────────────
@@ -100,6 +109,7 @@ export class CsApp extends LitElement {
   // ─── Lifecycle ───────────────────────────────────────────────────
   connectedCallback() {
     super.connectedCallback();
+    store.addEventListener('state-changed', this._boundStoreHandler);
     store.set('DATA', window.CODEBASE_DATA);
     if (!window.CODEBASE_DATA) {
       this.renderRoot.innerHTML = '<div style="padding:40px;color:var(--ctp-red);">Error: data.js failed to load. Run <code>node analyze.mjs</code> first.</div>';
@@ -108,9 +118,18 @@ export class CsApp extends LitElement {
     this._bindNavigationEvents();
   }
 
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    store.removeEventListener('state-changed', this._boundStoreHandler);
+    for (const { event, handler } of this._docListeners) {
+      document.removeEventListener(event, handler);
+    }
+    this._docListeners = [];
+  }
+
   // ─── Keyboard shortcuts ──────────────────────────────────────────
   _bindKeyboard() {
-    document.addEventListener('keydown', (e) => {
+    this._addDocListener('keydown', (e) => {
       // Ctrl+/ → toggle chat
       if ((e.ctrlKey || e.metaKey) && e.key === '/') {
         e.preventDefault();
@@ -185,14 +204,16 @@ export class CsApp extends LitElement {
       } else {
         store.setBatch({ currentLevel: 'modules', currentModule: null, currentSubdir: null });
       }
+    } else if (s.currentLevel === 'modules') {
+      // If graph is showing a group drill-down, go back to grouped overview
+      if (this._graph?.goBack?.()) return;
     }
-    // At modules level → do nothing
   }
 
   // ─── Event wiring ────────────────────────────────────────────────
   _bindNavigationEvents() {
     // Breadcrumb navigation
-    document.addEventListener('navigate', (e) => {
+    this._addDocListener('navigate', (e) => {
       const { action, module, subdir } = e.detail;
       if (action === 'modules') {
         store.setBatch({ currentLevel: 'modules', currentModule: null, currentSubdir: null, currentFile: null });
@@ -204,32 +225,38 @@ export class CsApp extends LitElement {
     });
 
     // Navigate to module (from explorer, global search)
-    document.addEventListener('navigate-to-module', (e) => {
+    this._addDocListener('navigate-to-module', (e) => {
       const name = e.detail.module || e.detail.name;
       store.setBatch({ currentLevel: 'files', currentModule: name, currentSubdir: null, currentFile: null });
     });
 
     // Navigate to file (from explorer, global search)
-    document.addEventListener('navigate-to-file', (e) => {
+    this._addDocListener('navigate-to-file', (e) => {
       const filePath = e.detail.filePath || e.detail.path;
       if (filePath) {
         this._graph?.navigateToFile(filePath);
       }
     });
 
+    // Navigate to module group (from explorer)
+    this._addDocListener('navigate-to-group', (e) => {
+      const { group } = e.detail;
+      if (group) this._graph?.navigateToGroup(group);
+    });
+
     // Navigate to subdir (from explorer)
-    document.addEventListener('navigate-to-subdir', (e) => {
+    this._addDocListener('navigate-to-subdir', (e) => {
       const { module, subdir } = e.detail;
       store.setBatch({ currentLevel: 'subdirs', currentModule: module, currentSubdir: subdir, currentFile: null });
     });
 
     // Start tour (from explorer, tour panel)
-    document.addEventListener('start-tour', (e) => {
+    this._addDocListener('start-tour', (e) => {
       const { tourId } = e.detail;
       const DATA = store.state.DATA;
       const tour = DATA?.tours?.find(t => t.id === tourId);
       if (tour && tour.steps?.length > 0) {
-        store.setBatch({ activeTour: tour, activeTourStep: 0 });
+        store.setBatch({ activeTour: tour, activeTourStep: 0, sidebarTab: 'tours', sidebarCollapsed: false });
         // Navigate to the first step's file
         const firstStep = tour.steps[0];
         if (firstStep.file) {
@@ -239,11 +266,11 @@ export class CsApp extends LitElement {
     });
 
     // Navigate tour step (from tour panel)
-    document.addEventListener('navigate-tour-step', (e) => {
+    this._addDocListener('navigate-tour-step', (e) => {
       const { stepIndex } = e.detail;
       const tour = store.state.activeTour;
       if (tour && tour.steps?.[stepIndex]) {
-        store.set('activeTourStep', stepIndex);
+        store.setBatch({ activeTourStep: stepIndex, sidebarTab: 'tours' });
         const step = tour.steps[stepIndex];
         if (step.file) {
           this._graph?.navigateToFile(step.file);
@@ -252,7 +279,7 @@ export class CsApp extends LitElement {
     });
 
     // Exit tour (from tour panel)
-    document.addEventListener('exit-tour', () => {
+    this._addDocListener('exit-tour', () => {
       store.setBatch({
         activeTour: null,
         activeTourStep: 0,
@@ -264,13 +291,13 @@ export class CsApp extends LitElement {
     });
 
     // Show code popup (from explorer)
-    document.addEventListener('show-code', (e) => {
+    this._addDocListener('show-code', (e) => {
       const { symbol, file } = e.detail;
       this._codePopup?.open(symbol, file);
     });
 
     // Filter graph nodes (from search panel)
-    document.addEventListener('filter-graph', (e) => {
+    this._addDocListener('filter-graph', (e) => {
       const { query } = e.detail;
       const cy = this._graph?.cyCode;
       if (!cy) return;
@@ -286,7 +313,7 @@ export class CsApp extends LitElement {
     });
 
     // open-global-search (from Ctrl+K in other contexts)
-    document.addEventListener('open-global-search', () => {
+    this._addDocListener('open-global-search', () => {
       this._globalSearch?.open();
     });
   }

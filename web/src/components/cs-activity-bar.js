@@ -42,10 +42,23 @@ export class CsActivityBar extends LitElement {
     super();
     this.activeTab = 'explorer';
     this.chatOpen = false;
-    store.addEventListener('state-changed', () => {
-      this.activeTab = store.state.sidebarTab;
-      this.chatOpen = store.state.chatOpen;
-    });
+    this._boundStoreHandler = this._onStoreChanged.bind(this);
+  }
+
+  _onStoreChanged() {
+    this.activeTab = store.state.sidebarTab;
+    this.chatOpen = store.state.chatOpen;
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    store.addEventListener('state-changed', this._boundStoreHandler);
+    this._onStoreChanged();
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    store.removeEventListener('state-changed', this._boundStoreHandler);
   }
 
   _setTab(tab) {

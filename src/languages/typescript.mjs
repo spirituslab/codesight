@@ -230,7 +230,7 @@ function extractClassSignature(node, lines) {
 
 function extractBlockSignature(node, lines) {
   const startLine = node.startPosition.row;
-  const endLine = Math.min(node.endPosition.row, startLine + 20);
+  const endLine = Math.min(node.endPosition.row, startLine + 20, lines.length - 1);
   const block = [];
   let braceDepth = 0;
   let started = false;
