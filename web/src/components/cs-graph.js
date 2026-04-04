@@ -206,9 +206,16 @@ export class CsGraph extends LitElement {
 
   firstUpdated() {
     this._initCytoscape();
+    // If data is already loaded (standalone mode), render immediately
+    if (store.state.DATA) {
+      this._renderWithData();
+    }
+    // Otherwise (webview mode), wait for DATA to arrive via _onStoreChanged
+  }
+
+  _renderWithData() {
     this._hasIdeas = !!store.state.DATA?.ideaStructure;
     if (this._hasIdeas) {
-      // Need to wait a tick for the idea container to be visible after _hasIdeas update
       this.updateComplete.then(() => {
         this._initIdeaLayer();
         this._renderIdeaLayer();
@@ -239,8 +246,10 @@ export class CsGraph extends LitElement {
   _onStoreChanged(e) {
     const { key, keys } = e.detail;
     const changed = keys || [key];
-    if (changed.includes('DATA')) {
-      this._hasIdeas = !!store.state.DATA?.ideaStructure;
+    if (changed.includes('DATA') && store.state.DATA) {
+      // Data arrived (or was updated) — render the graph
+      this._renderWithData();
+      return;
     }
     // Skip re-render if we caused this state change
     if (this._updatingStore) return;
@@ -311,9 +320,29 @@ export class CsGraph extends LitElement {
       } else if (nodeType === 'export') {
         // Select the symbol — explorer sidebar shows its details
         store.set('selectedSymbol', info || null);
+        // In VS Code webview mode, open the file at the symbol's line
+        if (window.__CODESIGHT_VSCODE__ && info && info.line) {
+          const file = store.state.currentFile;
+          const filePath = file?.path || file || '';
+          window.__CODESIGHT_VSCODE__.postMessage({
+            type: 'openFile',
+            path: filePath,
+            line: info.line,
+          });
+        }
       } else if (nodeType === 'file') {
         // Center file node — clear symbol selection to show file overview
         store.set('selectedSymbol', null);
+        // In VS Code webview mode, open the file
+        if (window.__CODESIGHT_VSCODE__) {
+          const file = store.state.currentFile;
+          const filePath = file?.path || file || id;
+          window.__CODESIGHT_VSCODE__.postMessage({
+            type: 'openFile',
+            path: filePath,
+            line: 1,
+          });
+        }
       }
     }
   }
@@ -1438,6 +1467,42 @@ export class CsGraph extends LitElement {
 
   /** Get the Cytoscape idea instance */
   get cyIdea() { return this._cyIdea; }
+
+  /**
+   * Highlight a node by ID and center the viewport on it.
+   * Used by the VS Code extension for editor → graph navigation.
+   * @param {string} nodeId - ID in "filePath:symbolName" format
+   */
+  highlightNode(nodeId) {
+    if (!this._cyCode) return;
+
+    // Try to find the node directly
+    let node = this._cyCode.getElementById(nodeId);
+
+    // If not found, try matching by partial ID (symbol name only)
+    if (!node || node.length === 0) {
+      const parts = nodeId.split(':');
+      const symbolName = parts[parts.length - 1];
+      node = this._cyCode.nodes().filter(n => {
+        const nId = n.data('id') || '';
+        const nInfo = n.data('info');
+        return nId === symbolName || nInfo?.name === symbolName;
+      });
+    }
+
+    if (node && node.length > 0) {
+      // Clear previous highlights
+      this._cyCode.nodes().removeClass('highlighted');
+      this._cyCode.edges().removeClass('highlighted');
+
+      // Highlight the target node
+      node.addClass('highlighted');
+      this._cyCode.animate({
+        center: { eles: node },
+        zoom: 1.5,
+      }, { duration: 300 });
+    }
+  }
 }
 
 customElements.define('cs-graph', CsGraph);

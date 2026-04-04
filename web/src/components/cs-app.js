@@ -110,10 +110,30 @@ export class CsApp extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     store.addEventListener('state-changed', this._boundStoreHandler);
-    store.set('DATA', window.CODEBASE_DATA);
-    if (!window.CODEBASE_DATA) {
-      this.renderRoot.innerHTML = '<div style="padding:40px;color:var(--ctp-red);">Error: data.js failed to load. Run <code>node analyze.mjs</code> first.</div>';
+
+    if (window.__CODESIGHT_WEBVIEW__) {
+      // VS Code webview mode — receive data via postMessage
+      this._messageHandler = (event) => {
+        const msg = event.data;
+        if (msg.type === 'updateData') {
+          store.set('DATA', msg.data);
+        } else if (msg.type === 'highlightNode') {
+          this._graph?.highlightNode?.(msg.nodeId);
+        } else if (msg.type === 'navigateToLevel') {
+          this._graph?.navigateTo?.(msg.level, msg.target);
+        }
+      };
+      window.addEventListener('message', this._messageHandler);
+      // Signal readiness to the extension host
+      window.__CODESIGHT_VSCODE__?.postMessage({ type: 'ready' });
+    } else {
+      // Standalone mode — load from data.js
+      store.set('DATA', window.CODEBASE_DATA);
+      if (!window.CODEBASE_DATA) {
+        this.renderRoot.innerHTML = '<div style="padding:40px;color:var(--ctp-red);">Error: data.js failed to load. Run <code>node analyze.mjs</code> first.</div>';
+      }
     }
+
     this._bindKeyboard();
     this._bindNavigationEvents();
   }
@@ -121,6 +141,9 @@ export class CsApp extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     store.removeEventListener('state-changed', this._boundStoreHandler);
+    if (this._messageHandler) {
+      window.removeEventListener('message', this._messageHandler);
+    }
     for (const { event, handler } of this._docListeners) {
       document.removeEventListener(event, handler);
     }

@@ -1,0 +1,52 @@
+{
+  "name": "codesight",
+  "displayName": "Codesight",
+  "description": "Interactive code structure visualization via static analysis",
+  "version": "0.1.0",
+  "publisher": "codesight",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codesight.openGraph",
+        "title": "Codesight: Open Graph"
+      },
+      {
+        "command": "codesight.refresh",
+        "title": "Codesight: Refresh Analysis"
+      },
+      {
+        "command": "codesight.revealInGraph",
+        "title": "Reveal in Codesight Graph"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "codesight.revealInGraph",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node",
+    "watch": "npm run build -- --watch",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.90.0",
+    "esbuild": "^0.21.0",
+    "typescript": "^5.4.0"
+  }
+}

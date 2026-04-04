@@ -1,5 +1,8 @@
 import typescript from "./typescript.mjs";
 import python from "./python.mjs";
+import c from "./c.mjs";
+import cpp from "./cpp.mjs";
+import java from "./java.mjs";
 
 const languages = {
   typescript,
@@ -8,6 +11,9 @@ const languages = {
     id: "javascript",
   },
   python,
+  c,
+  cpp,
+  java,
 };
 
 export function getLanguage(langId) {

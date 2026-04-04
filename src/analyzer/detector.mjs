@@ -6,6 +6,15 @@ const EXTENSION_MAP = {
   ".mjs":  "javascript",
   ".cjs":  "javascript",
   ".py":   "python",
+  ".c":    "c",
+  ".h":    "c",
+  ".cpp":  "cpp",
+  ".cc":   "cpp",
+  ".cxx":  "cpp",
+  ".hpp":  "cpp",
+  ".hh":   "cpp",
+  ".hxx":  "cpp",
+  ".java": "java",
 };
 
 export function detectLanguage(filePath) {
