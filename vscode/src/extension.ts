@@ -4,6 +4,7 @@ import { WebviewManager } from './webview';
 import { setupNavigation } from './navigation';
 import { registerChatParticipant } from './chat-participant';
 import { setupFileWatcher } from './watcher';
+import { generateIdeaLayer } from './idea-layer';
 
 let analyzer: AnalyzerWrapper | null = null;
 let webviewManager: WebviewManager;
@@ -62,6 +63,17 @@ export function activate(context: vscode.ExtensionContext) {
       if (result) {
         webviewManager.postMessage({ type: 'updateData', data: result });
       }
+    }),
+
+    vscode.commands.registerCommand('codesight.generateIdeaLayer', async () => {
+      const a = ensureAnalyzer();
+      if (!a) return;
+
+      if (!a.getResult()) {
+        vscode.window.showWarningMessage('Codesight: Run "Open Graph" first to analyze the project.');
+        return;
+      }
+      await generateIdeaLayer(a, webviewManager);
     }),
 
     vscode.commands.registerCommand('codesight.revealInGraph', () => {

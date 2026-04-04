@@ -26,6 +26,10 @@
         "title": "Codesight: Refresh Analysis"
       },
       {
+        "command": "codesight.generateIdeaLayer",
+        "title": "Codesight: Generate Idea Layer"
+      },
+      {
         "command": "codesight.revealInGraph",
         "title": "Reveal in Codesight Graph"
       }

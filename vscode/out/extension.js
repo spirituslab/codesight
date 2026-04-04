@@ -34,7 +34,7 @@ __export(extension_exports, {
   deactivate: () => deactivate
 });
 module.exports = __toCommonJS(extension_exports);
-var vscode5 = __toESM(require("vscode"));
+var vscode6 = __toESM(require("vscode"));
 
 // src/analyzer.ts
 var path = __toESM(require("path"));
@@ -470,16 +470,195 @@ function setupFileWatcher(context, analyzer2, webviewManager2) {
   context.subscriptions.push(disposable);
 }
 
+// src/idea-layer.ts
+var vscode5 = __toESM(require("vscode"));
+async function generateIdeaLayer(analyzer2, webviewManager2) {
+  const result = analyzer2.getResult();
+  if (!result) {
+    vscode5.window.showWarningMessage("Codesight: Run analysis first (Open Graph).");
+    return;
+  }
+  let model;
+  try {
+    const models = await vscode5.lm.selectChatModels();
+    if (!models || models.length === 0) {
+      vscode5.window.showErrorMessage(
+        "Codesight: No language model available. Install GitHub Copilot, Claude, or another LLM extension."
+      );
+      return;
+    }
+    model = models[0];
+    console.log(`[codesight] Using model: ${model.name} (${model.vendor})`);
+  } catch (err) {
+    vscode5.window.showErrorMessage(`Codesight: Failed to access language model: ${err.message}`);
+    return;
+  }
+  const prompt = buildIdeaStructurePrompt(result);
+  await vscode5.window.withProgress(
+    { location: vscode5.ProgressLocation.Notification, title: "Codesight: Generating idea layer...", cancellable: true },
+    async (progress, token) => {
+      try {
+        const messages = [
+          vscode5.LanguageModelChatMessage.User(
+            prompt.system + "\n\n" + prompt.user
+          )
+        ];
+        const response = await model.sendRequest(messages, {}, token);
+        let fullText = "";
+        for await (const fragment of response.text) {
+          fullText += fragment;
+        }
+        const parsed = parseJSON(fullText);
+        if (!parsed || !parsed.nodes) {
+          vscode5.window.showWarningMessage("Codesight: LLM returned an invalid idea structure. Try again.");
+          console.error("[codesight] Invalid idea structure response:", fullText.slice(0, 500));
+          return;
+        }
+        const validated = validateIdeaStructure(parsed, result);
+        result.ideaStructure = validated;
+        webviewManager2.postMessage({ type: "updateData", data: result });
+        vscode5.window.showInformationMessage("Codesight: Idea layer generated successfully.");
+      } catch (err) {
+        if (err.code === "NoPermissions") {
+          vscode5.window.showWarningMessage("Codesight: Please allow access to the language model when prompted.");
+        } else if (token.isCancellationRequested) {
+        } else {
+          vscode5.window.showErrorMessage(`Codesight: Idea layer generation failed: ${err.message}`);
+          console.error("[codesight] Idea layer error:", err);
+        }
+      }
+    }
+  );
+}
+function buildIdeaStructurePrompt(result) {
+  const { projectName, modules, edges, keyFiles, languages } = result;
+  const modulesSummary = (modules || []).map((m) => {
+    const desc = m.explanation || m.description || "";
+    const files = (m.files || []).slice(0, 8).map(
+      (f) => `    ${f.path}${f.explanation ? ": " + f.explanation : ""}`
+    ).join("\n");
+    return `  ${m.name} (${m.files?.length || 0} files, ${m.lineCount || 0} lines): ${desc}
+${files}`;
+  }).join("\n\n");
+  const edgesSummary = (edges || []).filter((e) => e.target !== "external").slice(0, 30).map((e) => `  ${e.source} \u2192 ${e.target} (${e.weight} imports)`).join("\n");
+  const keyFilesSummary = (keyFiles || []).slice(0, 15).map(
+    (f) => `  ${f.path} (imported by ${f.importedByCount} files${f.isEntryPoint ? ", entry point" : ""})`
+  ).join("\n");
+  const validModules = (modules || []).map((m) => m.name);
+  const system = `You are a software architect who explains projects conceptually. Your job is to create an "idea structure" \u2014 a conceptual map of what a project does, organized by concepts and purposes rather than file paths.
+
+Each idea node represents a concept, feature, or responsibility. Map each idea to actual code (modules, files, symbols) that implements it.
+
+IMPORTANT:
+- Only reference code that exists in the provided data
+- Valid module names: ${JSON.stringify(validModules)}
+- Create 5-15 idea nodes depending on project complexity
+- Create edges between ideas that have relationships (e.g., "feeds into", "depends on", "protects")
+- All ideas should be at the same level \u2014 no parent-child nesting, no hierarchy
+- The idea structure should help someone understand WHAT the project does before HOW it's implemented`;
+  const user = `Create an idea structure for this project.
+
+Project: ${projectName || "Unknown"}
+Languages: ${(languages || []).join(", ")}
+
+Modules:
+${modulesSummary}
+
+Dependencies:
+${edgesSummary}
+
+Key files:
+${keyFilesSummary}
+
+Respond in JSON format:
+{
+  "projectSummary": "2-3 sentence high-level description of what this project does and its purpose",
+  "nodes": [
+    {
+      "id": "idea:<kebab-case-id>",
+      "label": "Human Readable Concept Name",
+      "description": "1-2 sentence description of this concept/feature",
+      "codeRefs": [
+        { "type": "module", "name": "<module-name>" },
+        { "type": "file", "path": "<file-path>" },
+        { "type": "symbol", "path": "<file-path>", "name": "<symbol-name>" }
+      ]
+    }
+  ],
+  "edges": [
+    { "source": "idea:<id>", "target": "idea:<id>", "label": "relationship description" }
+  ]
+}
+
+Only use module names and file paths from the data above. Keep it conceptual \u2014 group by purpose, not by file structure.`;
+  return { system, user };
+}
+function validateIdeaStructure(idea, result) {
+  const validModules = new Set((result.modules || []).map((m) => m.name));
+  const validFiles = new Set((result.modules || []).flatMap((m) => (m.files || []).map((f) => f.path)));
+  const validSymbols = new Set((result.modules || []).flatMap(
+    (m) => (m.files || []).flatMap(
+      (f) => (f.symbols || []).filter((s) => s.exported).map((s) => `${f.path}::${s.name}`)
+    )
+  ));
+  if (result.rootFiles) {
+    for (const f of result.rootFiles) {
+      validFiles.add(f.path);
+      for (const s of (f.symbols || []).filter((s2) => s2.exported)) {
+        validSymbols.add(`${f.path}::${s.name}`);
+      }
+    }
+  }
+  const nodeIds = new Set(idea.nodes.map((n) => n.id));
+  let removedRefs = 0;
+  let totalRefs = 0;
+  for (const node of idea.nodes) {
+    delete node.parentId;
+    if (node.codeRefs) {
+      totalRefs += node.codeRefs.length;
+      node.codeRefs = node.codeRefs.filter((ref) => {
+        if (ref.type === "module" && validModules.has(ref.name)) return true;
+        if (ref.type === "file" && validFiles.has(ref.path)) return true;
+        if (ref.type === "symbol" && validSymbols.has(`${ref.path}::${ref.name}`)) return true;
+        removedRefs++;
+        return false;
+      });
+    }
+  }
+  if (idea.edges) {
+    idea.edges = idea.edges.filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target));
+  }
+  if (removedRefs > 0) {
+    console.log(`[codesight] Removed ${removedRefs}/${totalRefs} hallucinated code references from idea structure`);
+  }
+  return idea;
+}
+function parseJSON(text) {
+  try {
+    const cleaned = text.replace(/^```(?:json)?\s*\n?/m, "").replace(/\n?```\s*$/m, "").trim();
+    return JSON.parse(cleaned);
+  } catch {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        return JSON.parse(match[0]);
+      } catch {
+      }
+    }
+    return null;
+  }
+}
+
 // src/extension.ts
 var analyzer = null;
 var webviewManager;
 function getWorkspaceRoot() {
-  return vscode5.workspace.workspaceFolders?.[0]?.uri.fsPath || null;
+  return vscode6.workspace.workspaceFolders?.[0]?.uri.fsPath || null;
 }
 function ensureAnalyzer() {
   const root = getWorkspaceRoot();
   if (!root) {
-    vscode5.window.showWarningMessage("Codesight: Please open a folder first.");
+    vscode6.window.showWarningMessage("Codesight: Please open a folder first.");
     return null;
   }
   if (!analyzer) {
@@ -491,13 +670,13 @@ function activate(context) {
   console.log("[codesight] Extension activating...");
   webviewManager = new WebviewManager(context.extensionUri);
   context.subscriptions.push(
-    vscode5.commands.registerCommand("codesight.openGraph", async () => {
+    vscode6.commands.registerCommand("codesight.openGraph", async () => {
       const a = ensureAnalyzer();
       if (!a) return;
       const panel = webviewManager.createOrShow(context);
       if (!a.getResult()) {
-        await vscode5.window.withProgress(
-          { location: vscode5.ProgressLocation.Notification, title: "Codesight: Analyzing project..." },
+        await vscode6.window.withProgress(
+          { location: vscode6.ProgressLocation.Notification, title: "Codesight: Analyzing project..." },
           async () => {
             await a.runFullAnalysis();
           }
@@ -507,14 +686,14 @@ function activate(context) {
       if (result) {
         webviewManager.postMessage({ type: "updateData", data: result });
       } else {
-        vscode5.window.showErrorMessage("Codesight: Analysis failed. Check the Output panel for details.");
+        vscode6.window.showErrorMessage("Codesight: Analysis failed. Check the Output panel for details.");
       }
     }),
-    vscode5.commands.registerCommand("codesight.refresh", async () => {
+    vscode6.commands.registerCommand("codesight.refresh", async () => {
       const a = ensureAnalyzer();
       if (!a) return;
-      await vscode5.window.withProgress(
-        { location: vscode5.ProgressLocation.Notification, title: "Codesight: Refreshing analysis..." },
+      await vscode6.window.withProgress(
+        { location: vscode6.ProgressLocation.Notification, title: "Codesight: Refreshing analysis..." },
         async () => {
           await a.runFullAnalysis();
         }
@@ -524,10 +703,19 @@ function activate(context) {
         webviewManager.postMessage({ type: "updateData", data: result });
       }
     }),
-    vscode5.commands.registerCommand("codesight.revealInGraph", () => {
+    vscode6.commands.registerCommand("codesight.generateIdeaLayer", async () => {
+      const a = ensureAnalyzer();
+      if (!a) return;
+      if (!a.getResult()) {
+        vscode6.window.showWarningMessage('Codesight: Run "Open Graph" first to analyze the project.');
+        return;
+      }
+      await generateIdeaLayer(a, webviewManager);
+    }),
+    vscode6.commands.registerCommand("codesight.revealInGraph", () => {
       const root2 = getWorkspaceRoot();
       if (!root2 || !analyzer) return;
-      const editor = vscode5.window.activeTextEditor;
+      const editor = vscode6.window.activeTextEditor;
       if (!editor) return;
       const filePath = editor.document.uri.fsPath;
       const line = editor.selection.active.line + 1;
@@ -544,7 +732,7 @@ function activate(context) {
         webviewManager.postMessage({ type: "updateData", data: result });
       }
     } else if (msg.type === "requestRefresh") {
-      vscode5.commands.executeCommand("codesight.refresh");
+      vscode6.commands.executeCommand("codesight.refresh");
     }
   });
   const root = getWorkspaceRoot();
@@ -552,7 +740,7 @@ function activate(context) {
     analyzer = new AnalyzerWrapper(root);
     setupFileWatcher(context, analyzer, webviewManager);
     try {
-      if (vscode5.chat?.createChatParticipant) {
+      if (vscode6.chat?.createChatParticipant) {
         registerChatParticipant(context, analyzer);
       }
     } catch (_) {
