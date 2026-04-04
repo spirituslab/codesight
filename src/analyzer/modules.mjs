@@ -2,7 +2,7 @@
 
 import { relative } from "path";
 
-const SKIP_DIRS = new Set(["src", "lib", "app", "source"]);
+const SKIP_DIRS = new Set([]);
 const MONOREPO_DIRS = new Set(["packages", "apps", "services", "libs", "modules"]);
 
 // Threshold: if a single module has more files than this, try splitting into 2-level
@@ -26,24 +26,18 @@ export function getModuleName(filePath, projectRoot) {
  */
 export function getModuleFromRelPath(relPath) {
   const parts = relPath.split("/");
+  // Files at top level (no directory) → root
   if (parts.length <= 1) return "root";
 
-  let start = 0;
-  // Skip common source directory prefixes
-  while (start < parts.length - 1 && SKIP_DIRS.has(parts[start])) {
-    start++;
-  }
-
-  if (start >= parts.length - 1) return "root";
-
-  const firstDir = parts[start];
+  const firstDir = parts[0];
 
   // Monorepo pattern: packages/foo/..., apps/bar/...
   // Use 2-level: packages/foo
-  if (MONOREPO_DIRS.has(firstDir) && start + 1 < parts.length - 1) {
-    return `${firstDir}/${parts[start + 1]}`;
+  if (MONOREPO_DIRS.has(firstDir) && parts.length > 2) {
+    return `${firstDir}/${parts[1]}`;
   }
 
+  // Module = first directory (e.g. src, web, vscode, tests)
   return firstDir;
 }
 
@@ -88,6 +82,7 @@ export function refineModuleGrouping(moduleMap, projectRoot) {
 
     // Only split if there are multiple meaningful subdirectories
     if (subdirCounts.size >= 2) {
+      const rootOverflow = [];
       for (const file of data.files) {
         const rel = file.path;
         const parts = rel.split("/");
@@ -99,20 +94,26 @@ export function refineModuleGrouping(moduleMap, projectRoot) {
           break;
         }
 
-        let subModuleName;
         if (moduleDepth < parts.length - 1) {
-          subModuleName = `${moduleName}/${parts[moduleDepth]}`;
+          const subModuleName = `${moduleName}/${parts[moduleDepth]}`;
+          if (!refined.has(subModuleName)) {
+            refined.set(subModuleName, { files: [], lineCount: 0, languages: new Set() });
+          }
+          const mod = refined.get(subModuleName);
+          mod.files.push(file);
+          mod.lineCount += file.lineCount;
+          mod.languages.add(file.language);
         } else {
-          subModuleName = moduleName;
+          // File sits directly in the module dir (no subdirectory) — treat as root
+          rootOverflow.push(file);
         }
-
-        if (!refined.has(subModuleName)) {
-          refined.set(subModuleName, { files: [], lineCount: 0, languages: new Set() });
-        }
-        const mod = refined.get(subModuleName);
-        mod.files.push(file);
-        mod.lineCount += file.lineCount;
-        mod.languages.add(file.language);
+      }
+      // Keep lone files in the original module (as a standalone entry in the group)
+      if (rootOverflow.length > 0) {
+        const langSet = new Set();
+        let lc = 0;
+        for (const file of rootOverflow) { lc += file.lineCount; langSet.add(file.language); }
+        refined.set(moduleName, { files: rootOverflow, lineCount: lc, languages: langSet });
       }
     } else {
       refined.set(moduleName, data);

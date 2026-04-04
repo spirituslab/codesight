@@ -89,6 +89,12 @@ export class CsExplorer extends LitElement {
       margin-left: 8px;
     }
 
+    /* File/folder icons */
+    .icon-folder, .icon-file {
+      margin-right: 4px;
+      font-size: var(--font-size-sm);
+    }
+
     /* Color dot */
     .dot {
       display: inline-block;
@@ -444,8 +450,8 @@ export class CsExplorer extends LitElement {
     if (!this._data?.edges) return [];
     const connections = [];
     for (const e of this._data.edges) {
-      if (e.source === moduleName) connections.push({ module: e.target, weight: e.weight, direction: 'out' });
-      else if (e.target === moduleName) connections.push({ module: e.source, weight: e.weight, direction: 'in' });
+      if (e.source === moduleName) connections.push({ module: e.target, weight: e.weight, direction: 'imports' });
+      else if (e.target === moduleName) connections.push({ module: e.source, weight: e.weight, direction: 'imported by' });
     }
     return connections.sort((a, b) => b.weight - a.weight);
   }
@@ -533,7 +539,7 @@ export class CsExplorer extends LitElement {
     switch (this._level) {
       case 'modules': return this._activeGroup ? this._renderGroupOverview() : this._renderModuleOverview();
       case 'subdirs': return this._renderSubdirView();
-      case 'files': return this._renderFileList();
+      case 'files': return this._renderSubdirView();
       case 'symbols': return this._renderSymbolView();
       default: return html`<div class="desc">Unknown view</div>`;
     }
@@ -672,33 +678,39 @@ export class CsExplorer extends LitElement {
     if (!g) return this._renderModuleOverview();
 
     const subModules = [...g.modules];
-    if (g.standalone) subModules.push(g.standalone);
     subModules.sort((a, b) => b.lineCount - a.lineCount);
+    const standaloneFiles = g.standalone ? g.standalone.files : [];
 
-    const totalFiles = subModules.reduce((s, m) => s + m.fileCount, 0);
-    const totalLines = subModules.reduce((s, m) => s + m.lineCount, 0);
+    const totalFiles = subModules.reduce((s, m) => s + m.fileCount, 0) + standaloneFiles.length;
+    const totalLines = subModules.reduce((s, m) => s + m.lineCount, 0) + standaloneFiles.reduce((s, f) => s + f.lineCount, 0);
 
     return html`
       <h2>${g.name}/</h2>
-      <div class="subtitle">${subModules.length} sub-modules</div>
+      <div class="subtitle">${subModules.length} folders, ${standaloneFiles.length} files</div>
 
       <div class="stats">
-        <div class="stat"><div class="val">${subModules.length}</div><div class="label">Modules</div></div>
+        <div class="stat"><div class="val">${subModules.length}</div><div class="label">Folders</div></div>
         <div class="stat"><div class="val">${totalFiles}</div><div class="label">Files</div></div>
         <div class="stat"><div class="val">${(totalLines / 1000).toFixed(0)}k</div><div class="label">Lines</div></div>
       </div>
 
-      <div class="section-title">Sub-modules</div>
+      <div class="section-title">Contents</div>
       <ul class="file-list">
         ${subModules.map(mod => {
           const label = mod.name.includes('/') ? mod.name.split('/').slice(1).join('/') : mod.name;
           return html`
             <li @click=${() => this._onModuleClick(mod.name)}>
-              <span><span class="dot" style="background:${getColor(mod.name)}"></span>${label}</span>
+              <span><span class="icon-folder">&#128193;</span> ${label}/</span>
               <span class="lines">${mod.fileCount} files, ${(mod.lineCount / 1000).toFixed(1)}k lines</span>
             </li>
           `;
         })}
+        ${standaloneFiles.map(f => html`
+          <li @click=${() => this._onFileClick(f.path)}>
+            <span><span class="icon-file">&#128196;</span> ${f.name}</span>
+            <span class="lines">${f.lineCount} lines</span>
+          </li>
+        `)}
       </ul>
 
       <a class="back-link" @click=${() => this._dispatchNav('navigate', { action: 'modules' })}>&larr; Back to all modules</a>
@@ -711,9 +723,7 @@ export class CsExplorer extends LitElement {
     const mod = this._getModuleData(this._module);
     if (!mod) return html`<div class="desc">Module not found</div>`;
 
-    // Reconstruct subdirs from store — the graph component builds them,
-    // but we can derive from the module files for the sidebar
-    const subdirs = this._computeSubdirs(mod);
+    const { folders, files } = this._computeContents(mod);
     const connections = this._getModuleConnections(mod.name);
 
     return html`
@@ -726,8 +736,8 @@ export class CsExplorer extends LitElement {
       </div>
 
       <div class="stats">
-        <div class="stat"><div class="val">${subdirs.length}</div><div class="label">Folders</div></div>
-        <div class="stat"><div class="val">${mod.files.length}</div><div class="label">Files</div></div>
+        <div class="stat"><div class="val">${folders.length}</div><div class="label">Folders</div></div>
+        <div class="stat"><div class="val">${files.length}</div><div class="label">Files</div></div>
         <div class="stat"><div class="val">${(mod.lineCount / 1000).toFixed(1)}k</div><div class="label">Lines</div></div>
       </div>
 
@@ -736,75 +746,76 @@ export class CsExplorer extends LitElement {
         <div>
           ${connections.slice(0, 10).map(c => html`
             <div class="connection-item">
-              <span>${c.direction === 'out' ? '\u2192' : '\u2190'} ${c.module}</span>
-              <span class="weight">${c.weight} imports</span>
+              <span>${c.direction === 'imports' ? '\u2192 imports ' : '\u2190 imported by '}${c.module}</span>
+              <span class="weight">${c.weight}</span>
             </div>
           `)}
         </div>
       ` : nothing}
 
-      <div class="section-title">Subdirectories</div>
+      <div class="section-title">Contents</div>
       <ul class="file-list">
-        ${subdirs.map(sub => html`
-          <li @click=${() => this._onSubdirItemClick(mod, sub)}>
-            <span>${sub.name === '(root)' ? '(files in root)' : sub.name + '/'}</span>
+        ${folders.map(sub => html`
+          <li @click=${() => this._onFolderClick(mod, sub)}>
+            <span><span class="icon-folder">&#128193;</span> ${sub.name}/</span>
             <span class="lines">${sub.fileCount} files, ${(sub.lineCount / 1000).toFixed(1)}k lines</span>
+          </li>
+        `)}
+        ${files.map(item => html`
+          <li @click=${() => this._onFileClick(item.file.path)}>
+            <span><span class="icon-file">&#128196;</span> ${item.name}</span>
+            <span class="lines">${item.file.lineCount} lines</span>
           </li>
         `)}
       </ul>
     `;
   }
 
-  _computeSubdirs(mod) {
-    // Group files into subdirectories relative to currentSubdir
+  _computeContents(mod) {
+    // Get folders and loose files at the current level
+    const base = mod.name === 'root' ? '' : (mod.path || mod.name);
     const prefix = this._subdir
-      ? (mod.path || mod.name) + '/' + this._subdir + '/'
-      : (mod.path || mod.name) + '/';
-    const groups = new Map();
+      ? base + '/' + this._subdir + '/'
+      : base ? base + '/' : '';
+    const folderMap = new Map();
+    const looseFiles = [];
 
     for (const f of mod.files) {
       const rel = f.path.startsWith(prefix) ? f.path.slice(prefix.length) : null;
-      if (rel === null) {
-        // File is in root of current scope
-        if (!groups.has('(root)')) groups.set('(root)', []);
-        groups.get('(root)').push(f);
-        continue;
-      }
+      if (rel === null) continue;
       const slashIdx = rel.indexOf('/');
       if (slashIdx === -1) {
-        if (!groups.has('(root)')) groups.set('(root)', []);
-        groups.get('(root)').push(f);
+        looseFiles.push(f);
       } else {
         const dir = rel.substring(0, slashIdx);
-        if (!groups.has(dir)) groups.set(dir, []);
-        groups.get(dir).push(f);
+        if (!folderMap.has(dir)) folderMap.set(dir, []);
+        folderMap.get(dir).push(f);
       }
     }
 
-    return [...groups.entries()]
+    const folders = [...folderMap.entries()]
       .map(([name, files]) => ({
+        type: 'folder',
         name,
         files,
         fileCount: files.length,
         lineCount: files.reduce((s, f) => s + f.lineCount, 0),
       }))
-      .sort((a, b) => b.lineCount - a.lineCount);
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    const files = looseFiles
+      .map(f => ({ type: 'file', name: f.name, file: f }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    return { folders, files };
   }
 
-  _onSubdirItemClick(mod, sub) {
-    if (sub.name === '(root)') {
-      // Navigate to files view for current scope root files
-      this._dispatchNav('navigate-to-subdir', {
-        module: mod.name,
-        subdir: this._subdir || null,
-      });
-    } else {
-      const deeper = this._subdir ? this._subdir + '/' + sub.name : sub.name;
-      this._dispatchNav('navigate-to-subdir', {
-        module: mod.name,
-        subdir: deeper,
-      });
-    }
+  _onFolderClick(mod, sub) {
+    const deeper = this._subdir ? this._subdir + '/' + sub.name : sub.name;
+    this._dispatchNav('navigate-to-subdir', {
+      module: mod.name,
+      subdir: deeper,
+    });
   }
 
   // ---- 3. File list ----

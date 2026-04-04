@@ -299,6 +299,7 @@ export class CsGraph extends LitElement {
   _onNavigate(e) {
     const { action, module, subdir } = e.detail;
     if (action === 'modules') this._renderModuleView();
+    else if (action === 'group') this.navigateToGroup(module);
     else if (action === 'module') this._drillToModule(module);
     else if (action === 'subdir') this._drillToNestedDir(module, subdir);
   }
@@ -316,15 +317,19 @@ export class CsGraph extends LitElement {
         this._activeGroup = node.data('info');
         store.set('activeGroup', this._activeGroup);
         this._renderGroupDrillDown();
+      } else if (nodeType === 'file') {
+        // Loose file in group view — drill to symbols
+        this._drillToSymbols(id);
       } else {
         this._drillToModule(id);
       }
     } else if (level === 'subdirs') {
-      const info = node.data('info');
-      if (info && info.name) {
-        if (info.name === '(root)') {
-          this._renderFileView(store.state.currentModule, store.state.currentSubdir);
-        } else {
+      if (nodeType === 'file') {
+        // Loose file at this level — drill to symbols
+        this._drillToSymbols(id);
+      } else {
+        const info = node.data('info');
+        if (info && info.name) {
           const deeper = store.state.currentSubdir
             ? store.state.currentSubdir + '/' + info.name
             : info.name;
@@ -391,6 +396,19 @@ export class CsGraph extends LitElement {
             'width': 'data(size)', 'height': 'data(sizeH)',
             'border-width': 1, 'border-color': 'data(borderColor)', 'border-opacity': 0.4,
             'text-max-width': '90px', 'text-wrap': 'ellipsis',
+          }
+        },
+        {
+          selector: 'node[nodeType="subdir"]',
+          style: {
+            'shape': 'round-rectangle',
+            'border-width': 2, 'border-opacity': 0.7,
+          }
+        },
+        {
+          selector: 'node[nodeType="file"]',
+          style: {
+            'shape': 'ellipse',
           }
         },
         { selector: 'node.dimmed', style: { 'opacity': 0.15 } },
@@ -499,7 +517,13 @@ export class CsGraph extends LitElement {
         } else if (info.kind) {
           tipHtml += `<div style="color:#6c7086;font-size:10px">${info.kind}${info.parameters?.length ? ' (' + info.parameters.length + ' params)' : ''}</div>`;
         } else if (info.source) {
-          tipHtml += `<div style="color:#6c7086;font-size:10px">${info.symbols?.length || 0} symbols from ${escHtml(info.resolvedModule || '')}</div>`;
+          const fromPath = info.resolvedPath || info.source;
+          const symList = (info.symbols || []).slice(0, 5).join(', ');
+          const symExtra = (info.symbols || []).length > 5 ? ` +${info.symbols.length - 5} more` : '';
+          tipHtml += `<div style="color:#6c7086;font-size:10px">from ${escHtml(fromPath)}</div>`;
+          if (symList) {
+            tipHtml += `<div style="color:#a6adc8;font-size:10px;margin-top:2px">${escHtml(symList)}${symExtra}</div>`;
+          }
         }
         this._showTooltip(e.originalEvent, tipHtml);
       }
@@ -512,7 +536,7 @@ export class CsGraph extends LitElement {
 
     this._cyCode.on('mouseover', 'edge', (e) => {
       const edge = e.target;
-      this._showTooltip(e.originalEvent, `<div style="font-weight:600">${escHtml(edge.data('source'))} → ${escHtml(edge.data('target'))}</div><div style="color:#6c7086;font-size:10px">${edge.data('rawWeight')} imports</div>`);
+      this._showTooltip(e.originalEvent, `<div style="font-weight:600">${escHtml(edge.data('source'))} → ${escHtml(edge.data('target'))}</div><div style="color:#6c7086;font-size:10px">${edge.data('rawWeight')} dependencies</div>`);
     });
 
     this._cyCode.on('mouseout', 'edge', () => this._hideTooltip());
@@ -623,30 +647,10 @@ export class CsGraph extends LitElement {
 
   _getFileInnerPath(filePath, moduleName) {
     let inner = filePath;
-    const srcPrefixes = [
-      // Common across languages
-      'src/', 'lib/', 'app/', 'source/', 'packages/',
-      // Java / Kotlin
-      'src/main/java/', 'src/main/kotlin/', 'src/main/resources/',
-      'src/test/java/', 'src/test/kotlin/', 'src/test/resources/',
-      'src/main/', 'src/test/',
-      // Go
-      'cmd/', 'internal/', 'pkg/',
-      // C / C++
-      'include/', 'sources/',
-    ];
-    // Strip top-level src prefix first
-    for (const prefix of srcPrefixes) {
-      if (inner.startsWith(prefix)) { inner = inner.substring(prefix.length); break; }
-    }
-    // Strip module path
+    // Strip module path prefix
     const modulePath = moduleName === 'root' ? '' : moduleName;
     if (modulePath && inner.startsWith(modulePath + '/')) {
       inner = inner.substring(modulePath.length + 1);
-    }
-    // Strip src prefix again after module path (e.g. web/src/... → src/... → ...)
-    for (const prefix of srcPrefixes) {
-      if (inner.startsWith(prefix)) { inner = inner.substring(prefix.length); break; }
     }
     return inner;
   }
@@ -670,8 +674,9 @@ export class CsGraph extends LitElement {
   _getModuleConnections(moduleName) {
     const connections = [];
     for (const e of store.state.DATA.edges) {
-      if (e.source === moduleName) connections.push({ module: e.target, weight: e.weight, direction: 'out' });
-      else if (e.target === moduleName) connections.push({ module: e.source, weight: e.weight, direction: 'in' });
+      // e.source is the importer, e.target is the imported
+      if (e.source === moduleName) connections.push({ module: e.target, weight: e.weight, direction: 'imports' });
+      else if (e.target === moduleName) connections.push({ module: e.source, weight: e.weight, direction: 'imported by' });
     }
     return connections.sort((a, b) => b.weight - a.weight);
   }
@@ -767,13 +772,15 @@ export class CsGraph extends LitElement {
       });
     }
 
-    // Aggregate edges between groups
+    // Aggregate edges between groups (arrows point toward the importer)
     const edgeMap = new Map();
     for (const edge of store.state.DATA.edges) {
       const srcGroup = modToGroup.get(edge.source);
       const tgtGroup = modToGroup.get(edge.target);
       if (!srcGroup || !tgtGroup || srcGroup === tgtGroup) continue;
-      const key = `${srcGroup}->${tgtGroup}`;
+      // edge.source is the importer, edge.target is the imported
+      // Arrow: imported → importer (dependency flows toward consumer)
+      const key = `${tgtGroup}->${srcGroup}`;
       edgeMap.set(key, (edgeMap.get(key) || 0) + edge.weight);
     }
     for (const [key, weight] of edgeMap) {
@@ -809,7 +816,8 @@ export class CsGraph extends LitElement {
     if (!group) return;
 
     const subModules = [...group.modules];
-    if (group.standalone) subModules.push(group.standalone);
+    // Don't add standalone as a sub-module — render its files directly
+    const standaloneFiles = group.standalone ? group.standalone.files : [];
 
     const elements = [];
     for (const mod of subModules) {
@@ -826,19 +834,86 @@ export class CsGraph extends LitElement {
       });
     }
 
-    // Edges between sub-modules only
+    // Render standalone loose files as individual file nodes
+    const groupColor = getColor(group.name);
+    for (const f of standaloneFiles) {
+      const w = Math.max(28, Math.min(65, 8 * Math.log2(f.lineCount + 1)));
+      const label = f.name.replace(/\.[^.]+$/, '');
+      elements.push({
+        data: {
+          id: f.path, label, color: groupColor,
+          borderColor: shadeColor(groupColor, -30),
+          size: w, sizeH: w * 0.6,
+          nodeType: 'file', info: f,
+        },
+      });
+    }
+
+    // Edges between sub-modules (from module-level edges)
     const subSet = new Set(subModules.map(m => m.name));
     for (const edge of store.state.DATA.edges) {
       if (!subSet.has(edge.source) || !subSet.has(edge.target)) continue;
       elements.push({
         data: {
-          id: `${edge.source}->${edge.target}`,
-          source: edge.source, target: edge.target,
+          id: `e:${edge.target}\0${edge.source}`,
+          source: edge.target, target: edge.source,
           width: Math.max(0.5, Math.min(6, Math.log2(edge.weight + 1))),
           rawWeight: edge.weight,
-          edgeColor: getColor(edge.source),
+          edgeColor: getColor(edge.target),
         },
       });
+    }
+
+    // Edges involving standalone files (from import data)
+    if (standaloneFiles.length > 0) {
+      const standalonePathSet = new Set(standaloneFiles.map(f => f.path));
+      // Map file paths to their sub-module name for quick lookup
+      const fileToSubModule = new Map();
+      for (const mod of subModules) {
+        for (const f of mod.files) fileToSubModule.set(f.path, mod.name);
+      }
+      const edgeMap = new Map();
+
+      // Standalone files importing from sub-modules or other standalone files
+      for (const f of standaloneFiles) {
+        for (const imp of f.imports) {
+          if (imp.resolvedModule === 'external' || !imp.resolvedPath) continue;
+          const targetMod = fileToSubModule.get(imp.resolvedPath);
+          if (targetMod) {
+            const key = `${targetMod}\0${f.path}`;
+            if (!edgeMap.has(key)) edgeMap.set(key, { source: targetMod, target: f.path, weight: 0 });
+            edgeMap.get(key).weight++;
+          } else if (standalonePathSet.has(imp.resolvedPath) && imp.resolvedPath !== f.path) {
+            const key = `${imp.resolvedPath}\0${f.path}`;
+            if (!edgeMap.has(key)) edgeMap.set(key, { source: imp.resolvedPath, target: f.path, weight: 0 });
+            edgeMap.get(key).weight++;
+          }
+        }
+      }
+
+      // Sub-module files importing standalone files
+      for (const mod of subModules) {
+        for (const f of mod.files) {
+          for (const imp of f.imports) {
+            if (imp.resolvedModule === 'external' || !imp.resolvedPath) continue;
+            if (standalonePathSet.has(imp.resolvedPath)) {
+              const key = `${imp.resolvedPath}\0${mod.name}`;
+              if (!edgeMap.has(key)) edgeMap.set(key, { source: imp.resolvedPath, target: mod.name, weight: 0 });
+              edgeMap.get(key).weight++;
+            }
+          }
+        }
+      }
+
+      for (const [key, { source, target, weight }] of edgeMap) {
+        elements.push({
+          data: {
+            id: `e:${key}`, source, target,
+            width: Math.max(0.5, Math.min(4, Math.log2(weight + 1))),
+            rawWeight: weight, edgeColor: groupColor,
+          },
+        });
+      }
     }
 
     this._cyCode.elements().remove();
@@ -896,21 +971,9 @@ export class CsGraph extends LitElement {
     });
 
     const subdirMap = this._getSubdirMap(mod.files, moduleName, nestedPath);
-    const subdirCount = [...subdirMap.keys()].filter(k => k !== '(root)').length;
-
-    if (subdirCount >= 1 && subdirMap.has('(root)') && subdirMap.get('(root)').length > 0) {
-      this._setStoreSingle('currentLevel', 'subdirs');
-      this._renderSubdirView(mod, subdirMap);
-    } else if (subdirCount === 1) {
-      const onlyDir = [...subdirMap.keys()].find(k => k !== '(root)');
-      const deeper = nestedPath ? nestedPath + '/' + onlyDir : onlyDir;
-      this._drillToNestedDir(moduleName, deeper);
-    } else if (subdirCount >= 2) {
-      this._setStoreSingle('currentLevel', 'subdirs');
-      this._renderSubdirView(mod, subdirMap);
-    } else {
-      this._renderFileView(moduleName, nestedPath);
-    }
+    // Always show folders + loose files together at current level
+    this._setStoreSingle('currentLevel', 'subdirs');
+    this._renderSubdirView(mod, subdirMap);
   }
 
   _renderSubdirView(mod, subdirMap) {
@@ -923,45 +986,71 @@ export class CsGraph extends LitElement {
       }))
       .sort((a, b) => b.lineCount - a.lineCount);
 
+    const modColor = getColor(mod.name);
     for (let si = 0; si < subdirs.length; si++) {
       const sub = subdirs[si];
-      const w = Math.max(30, Math.min(80, 12 * Math.log2(sub.lineCount + 1)));
-      const label = sub.name === '(root)' ? `${mod.name}/ files` : sub.name;
-      const color = shadeColor(getColor(mod.name), si * 8 - 15);
-      elements.push({
-        data: {
-          id: `subdir:${sub.name}`, label, color,
-          borderColor: shadeColor(color, -30),
-          size: w, sizeH: w * 0.65,
-          nodeType: 'subdir', info: sub,
-        },
-      });
+      if (sub.name === '(root)') {
+        // Show loose files as individual file nodes
+        for (const f of sub.files) {
+          const w = Math.max(28, Math.min(65, 8 * Math.log2(f.lineCount + 1)));
+          const label = f.name.replace(/\.[^.]+$/, '');
+          elements.push({
+            data: {
+              id: f.path, label, color: modColor,
+              borderColor: shadeColor(modColor, -30),
+              size: w, sizeH: w * 0.6,
+              nodeType: 'file', info: f,
+            },
+          });
+        }
+      } else {
+        // Show subdirectories as folder nodes
+        const w = Math.max(30, Math.min(80, 12 * Math.log2(sub.lineCount + 1)));
+        const color = shadeColor(modColor, si * 8 - 15);
+        elements.push({
+          data: {
+            id: `subdir:${sub.name}`, label: sub.name, color,
+            borderColor: shadeColor(color, -30),
+            size: w, sizeH: w * 0.65,
+            nodeType: 'subdir', info: sub,
+          },
+        });
+      }
     }
 
-    // Build edges between subdirs
+    // Build edges (arrows point toward the importer)
+    // (root) files are individual nodes (id = f.path), subdirs are subdir:name
     const edgeMap = new Map();
     for (const [subdirName, files] of subdirMap) {
       for (const f of files) {
         for (const imp of f.imports) {
           if (imp.resolvedModule !== mod.name && imp.resolvedModule !== 'root') continue;
-          const targetPath = this._resolveImportPath(imp.source, f.path);
+          const targetPath = imp.resolvedPath || this._resolveImportPath(imp.source, f.path);
           if (!targetPath) continue;
           for (const [targetSub, targetFiles] of subdirMap) {
-            if (targetSub === subdirName) continue;
-            if (targetFiles.some(tf => tf.path.replace(/\.[^.]+$/, '').endsWith(targetPath) || tf.path === targetPath)) {
-              const key = `subdir:${subdirName}->subdir:${targetSub}`;
-              edgeMap.set(key, (edgeMap.get(key) || 0) + 1);
+            // Skip same-subdir edges (but allow edges between individual (root) files)
+            if (targetSub === subdirName && subdirName !== '(root)') continue;
+            const matchedFile = targetFiles.find(tf => {
+              if (tf.path === f.path) return false; // no self-loops
+              return tf.path === targetPath || tf.path.replace(/\.[^.]+$/, '').endsWith(targetPath) || targetPath.replace(/\.[^.]+$/, '').endsWith(tf.path.replace(/\.[^.]+$/, ''));
+            });
+            if (matchedFile) {
+              // Resolve actual node IDs — (root) files use f.path, subdirs use subdir:name
+              const srcId = subdirName === '(root)' ? f.path : `subdir:${subdirName}`;
+              const tgtId = targetSub === '(root)' ? matchedFile.path : `subdir:${targetSub}`;
+              const key = `${tgtId}\0${srcId}`;
+              if (!edgeMap.has(key)) edgeMap.set(key, { source: tgtId, target: srcId, weight: 0 });
+              edgeMap.get(key).weight++;
               break;
             }
           }
         }
       }
     }
-    for (const [key, weight] of edgeMap) {
-      const [src, tgt] = key.split('->');
+    for (const [key, { source, target, weight }] of edgeMap) {
       elements.push({
         data: {
-          id: key, source: src, target: tgt,
+          id: `e:${key}`, source, target,
           width: Math.max(0.5, Math.min(4, Math.log2(weight + 1))),
           rawWeight: weight, edgeColor: getColor(mod.name),
         },
@@ -970,6 +1059,7 @@ export class CsGraph extends LitElement {
 
     this._cyCode.elements().remove();
     this._cyCode.add(elements);
+
     this._cyCode.layout({
       name: 'cose', animate: true, animationDuration: 400,
       nodeDimensionsIncludeLabels: true,
@@ -977,6 +1067,7 @@ export class CsGraph extends LitElement {
       gravity: 0.3, numIter: 1000, padding: 50,
       randomize: true, nodeOverlap: 20,
     }).run();
+
     this._cyCode.fit(undefined, 40);
 
     this.renderRoot.querySelector('#legend').innerHTML = '';
@@ -1021,27 +1112,28 @@ export class CsGraph extends LitElement {
         data: {
           id: f.path, label, color: modColor,
           borderColor: shadeColor(modColor, -30),
-          size: w, sizeH: w * 0.6, info: f,
+          size: w, sizeH: w * 0.6, nodeType: 'file', info: f,
         },
         classes: classes.join(' '),
       });
     }
 
-    // Build edges between files
+    // Build edges between files (arrows point toward the importer)
     const filePaths = new Set(files.map(f => f.path));
     for (const f of files) {
       for (const imp of f.imports) {
         if (imp.resolvedModule === 'external') continue;
-        const targetPath = this._resolveImportPath(imp.source, f.path);
+        const targetPath = imp.resolvedPath || this._resolveImportPath(imp.source, f.path);
         if (!targetPath) continue;
         for (const fp of filePaths) {
           if (fp === f.path) continue;
-          if (fp.replace(/\.[^.]+$/, '').endsWith(targetPath) || fp === targetPath) {
-            const edgeId = `${f.path}->${fp}`;
+          if (fp === targetPath || fp.replace(/\.[^.]+$/, '').endsWith(targetPath) || targetPath.replace(/\.[^.]+$/, '').endsWith(fp.replace(/\.[^.]+$/, ''))) {
+            // fp is imported BY f, arrow: fp → f
+            const edgeId = `e:${fp}\0${f.path}`;
             if (!elements.some(e => e.data?.id === edgeId)) {
               elements.push({
                 data: {
-                  id: edgeId, source: f.path, target: fp,
+                  id: edgeId, source: fp, target: f.path,
                   width: 1, rawWeight: 1, edgeColor: modColor,
                 },
               });
@@ -1078,12 +1170,22 @@ export class CsGraph extends LitElement {
   // ─── Level 3: Symbols ─────────────────────────────────────────────
 
   _drillToSymbols(filePath) {
-    const mod = store.state.currentModule === 'root'
+    let mod = store.state.currentModule === 'root'
       ? { name: 'root', files: store.state.DATA.rootFiles }
       : store.state.DATA.modules.find(m => m.name === store.state.currentModule);
-    if (!mod) return;
-    const file = mod.files.find(f => f.path === filePath);
-    if (!file) return;
+    let file = mod?.files?.find(f => f.path === filePath);
+    // If not found in current module, search all modules (e.g. standalone files in group view)
+    if (!file) {
+      for (const m of store.state.DATA.modules) {
+        file = m.files.find(f => f.path === filePath);
+        if (file) { mod = m; break; }
+      }
+      if (!file && store.state.DATA.rootFiles) {
+        file = store.state.DATA.rootFiles.find(f => f.path === filePath);
+        if (file) mod = { name: 'root', files: store.state.DATA.rootFiles };
+      }
+    }
+    if (!mod || !file) return;
 
     this._setStoreState({
       currentLevel: 'symbols',
@@ -1137,20 +1239,29 @@ export class CsGraph extends LitElement {
       });
     }
 
-    // Imports — bottom semicircle
-    const imports = file.imports;
-    for (let i = 0; i < imports.length; i++) {
-      const imp = imports[i];
-      const angle = ((i / Math.max(imports.length, 1)) * Math.PI) + Math.PI / 2;
-      const radius = 220 + (imports.length > 10 ? 50 : 0);
-      const nodeId = `import:${i}:${imp.source}`;
-      const srcParts = imp.source.replace(/\.[^.]+$/, '').split('/');
-      const shortLabel = srcParts[srcParts.length - 1];
+    // Imports — bottom semicircle (show individual imported symbols)
+    const importSymbols = [];
+    for (const imp of file.imports) {
       const impColor = imp.resolvedModule === 'external' ? '#585b70' : getColor(imp.resolvedModule);
+      if (imp.symbols && imp.symbols.length > 0) {
+        for (const symName of imp.symbols) {
+          importSymbols.push({ name: symName, imp, color: impColor });
+        }
+      } else {
+        // Namespace/default import — show file name as fallback
+        const srcParts = imp.source.replace(/\.[^.]+$/, '').split('/');
+        importSymbols.push({ name: srcParts[srcParts.length - 1], imp, color: impColor });
+      }
+    }
+    for (let i = 0; i < importSymbols.length; i++) {
+      const { name, imp, color: impColor } = importSymbols[i];
+      const angle = ((i / Math.max(importSymbols.length, 1)) * Math.PI) + Math.PI / 2;
+      const radius = 220 + (importSymbols.length > 10 ? 50 : 0);
+      const nodeId = `import:${i}:${name}`;
 
       elements.push({
         data: {
-          id: nodeId, label: shortLabel, color: impColor,
+          id: nodeId, label: name, color: impColor,
           borderColor: shadeColor(impColor, -20),
           size: 32, sizeH: 22,
           nodeType: 'import', info: imp,
@@ -1164,7 +1275,7 @@ export class CsGraph extends LitElement {
         data: {
           id: `${nodeId}->center`,
           source: nodeId, target: 'center',
-          width: 1, rawWeight: imp.symbols.length || 1,
+          width: 1, rawWeight: 1,
           edgeColor: impColor,
         },
       });
@@ -1336,10 +1447,11 @@ export class CsGraph extends LitElement {
     this._cyIdea.add(elements);
     this._cyIdea.layout({
       name: 'cose', animate: false, nodeDimensionsIncludeLabels: true,
-      idealEdgeLength: () => 120, nodeRepulsion: () => 8000,
-      gravity: 0.5, numIter: 500, padding: 20,
+      idealEdgeLength: () => 200, nodeRepulsion: () => 50000,
+      gravity: 0.05, numIter: 1000, padding: 50,
+      randomize: true, componentSpacing: 150,
     }).run();
-    this._cyIdea.fit(undefined, 15);
+    this._cyIdea.fit(undefined, 40);
   }
 
   _highlightIdeaNode(nodeId) {

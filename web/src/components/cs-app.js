@@ -255,7 +255,7 @@ export class CsApp extends LitElement {
     // Navigate to module (from explorer, global search)
     this._addDocListener('navigate-to-module', (e) => {
       const name = e.detail.module || e.detail.name;
-      store.setBatch({ currentLevel: 'files', currentModule: name, currentSubdir: null, currentFile: null });
+      store.setBatch({ currentLevel: 'subdirs', currentModule: name, currentSubdir: null, currentFile: null });
     });
 
     // Navigate to file (from explorer, global search)
