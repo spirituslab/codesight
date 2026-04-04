@@ -162,7 +162,7 @@ server.tool(
           file: filePath,
           directDependents: impact.directDependents || [],
           transitiveDependents: impact.transitiveDependents || [],
-          riskScore: impact.riskScore || 0,
+          riskLevel: impact.riskLevel || 'low',
           directCount: impact.directDependents?.length || 0,
           transitiveCount: impact.transitiveDependents?.length || 0,
         }, null, 2),
@@ -187,8 +187,8 @@ server.tool(
     if (functionName) {
       const name = functionName.toLowerCase();
       edges = edges.filter(e =>
-        e.from?.toLowerCase().includes(name) ||
-        e.to?.toLowerCase().includes(name)
+        e.source?.toLowerCase().includes(name) ||
+        e.target?.toLowerCase().includes(name)
       );
     }
 
@@ -202,13 +202,17 @@ server.tool(
           totalEdges: callGraph.edges?.length || 0,
           shownEdges: limited.length,
           stats: callGraph.stats,
-          edges: limited.map(e => ({
-            from: e.from,
-            to: e.to,
-            fromFile: e.fromFile,
-            toFile: e.toFile,
-            confidence: e.confidence,
-          })),
+          edges: limited.map(e => {
+            const sourceSep = e.source?.indexOf('::') ?? -1;
+            const targetSep = e.target?.indexOf('::') ?? -1;
+            return {
+              from: e.source,
+              to: e.target,
+              fromFile: sourceSep !== -1 ? e.source.substring(0, sourceSep) : e.source,
+              toFile: targetSep !== -1 ? e.target.substring(0, targetSep) : e.target,
+              confidence: e.confidence,
+            };
+          }),
         }, null, 2),
       }],
     };

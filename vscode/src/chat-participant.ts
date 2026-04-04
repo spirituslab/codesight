@@ -57,8 +57,6 @@ export function registerChatParticipant(
     }
   });
 
-  participant.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'icon.png');
-
   context.subscriptions.push(participant);
 }
 
@@ -131,7 +129,7 @@ function buildImpactContext(prompt: string, result: any): string {
     for (const dep of (impact.transitiveDependents || []).slice(0, 15)) {
       context += `  - ${dep}\n`;
     }
-    context += `- Risk score: ${impact.riskScore || 'N/A'}\n`;
+    context += `- Risk level: ${impact.riskLevel || 'N/A'}\n`;
   } else {
     // Show highest-impact files
     const sorted = keys
@@ -155,18 +153,18 @@ function buildCallChainContext(prompt: string, result: any): string {
   // Show a sample of call graph edges relevant to the question
   const edges = callGraph.edges || [];
   const relevantEdges = edges.filter((e: any) =>
-    prompt.includes(e.from?.toLowerCase()) || prompt.includes(e.to?.toLowerCase())
+    prompt.includes(e.source?.toLowerCase()) || prompt.includes(e.target?.toLowerCase())
   );
 
   if (relevantEdges.length > 0) {
     context += 'Relevant call relationships:\n';
     for (const edge of relevantEdges.slice(0, 30)) {
-      context += `- ${edge.from} → ${edge.to} (${edge.confidence || 'unknown'} confidence)\n`;
+      context += `- ${edge.source} → ${edge.target} (${edge.confidence || 'unknown'} confidence)\n`;
     }
   } else {
     context += 'Sample call relationships:\n';
     for (const edge of edges.slice(0, 20)) {
-      context += `- ${edge.from} → ${edge.to}\n`;
+      context += `- ${edge.source} → ${edge.target}\n`;
     }
   }
 

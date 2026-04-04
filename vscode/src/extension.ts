@@ -10,6 +10,7 @@ import * as path from 'path';
 
 let analyzer: AnalyzerWrapper | null = null;
 let webviewManager: WebviewManager;
+let fileWatcherDisposable: vscode.Disposable | null = null;
 const activeTimers: Array<ReturnType<typeof setInterval> | ReturnType<typeof setTimeout>> = [];
 
 function getWorkspaceRoot(): string | null {
@@ -135,7 +136,7 @@ export function activate(context: vscode.ExtensionContext) {
   const root = getWorkspaceRoot();
   if (root) {
     analyzer = new AnalyzerWrapper(root);
-    setupFileWatcher(context, analyzer, webviewManager);
+    fileWatcherDisposable = setupFileWatcher(context, analyzer, webviewManager);
 
     try {
       if (vscode.chat?.createChatParticipant) {
@@ -150,9 +151,14 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       const newRoot = getWorkspaceRoot();
+      // Dispose old watcher before creating a new one
+      if (fileWatcherDisposable) {
+        fileWatcherDisposable.dispose();
+        fileWatcherDisposable = null;
+      }
       if (newRoot) {
         analyzer = new AnalyzerWrapper(newRoot);
-        setupFileWatcher(context, analyzer, webviewManager);
+        fileWatcherDisposable = setupFileWatcher(context, analyzer, webviewManager);
       } else {
         analyzer = null;
       }
@@ -260,13 +266,25 @@ async function handleChatRequest(
     // Delete old response if exists
     try { fs.unlinkSync(responseFile); } catch (_) {}
 
-    const poll = setInterval(() => {
+    let poll: ReturnType<typeof setInterval>;
+    let timeout: ReturnType<typeof setTimeout>;
+
+    const cleanup = () => {
+      clearInterval(poll);
+      clearTimeout(timeout);
+      const pollIdx = activeTimers.indexOf(poll);
+      if (pollIdx !== -1) activeTimers.splice(pollIdx, 1);
+      const timeoutIdx = activeTimers.indexOf(timeout);
+      if (timeoutIdx !== -1) activeTimers.splice(timeoutIdx, 1);
+    };
+
+    poll = setInterval(() => {
       try {
         if (!fs.existsSync(responseFile)) return;
         const raw = fs.readFileSync(responseFile, 'utf-8');
         const data = JSON.parse(raw);
         if (data.timestamp && data.timestamp > requestTimestamp - 1000) {
-          clearInterval(poll);
+          cleanup();
           webview.postMessage({ type: 'chatResponse', text: data.text, originalMessage: message });
           try { fs.unlinkSync(responseFile); } catch (_) {}
         }
@@ -275,8 +293,8 @@ async function handleChatRequest(
     activeTimers.push(poll);
 
     // Timeout after 3 minutes
-    const timeout = setTimeout(() => {
-      clearInterval(poll);
+    timeout = setTimeout(() => {
+      cleanup();
     }, 180000);
     activeTimers.push(timeout);
   } else {

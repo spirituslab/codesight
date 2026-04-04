@@ -947,7 +947,9 @@ function resolvePythonCallee(node, importLookup, localSymbols) {
 }
 function resolveImport2(importPath, fromFile, projectRoot, fileIndex) {
   if (importPath.startsWith(".")) {
-    const dots = importPath.match(/^\.+/)[0].length;
+    const dotMatch = importPath.match(/^\.+/);
+    if (!dotMatch) return { resolvedPath: null, resolvedModule: "external" };
+    const dots = dotMatch[0].length;
     let base = (0, import_path4.dirname)(fromFile);
     for (let i = 1; i < dots; i++) base = (0, import_path4.dirname)(base);
     const modulePart = importPath.slice(dots).replace(/\./g, "/");
@@ -2550,8 +2552,13 @@ function buildCallGraph(modules, rootFiles, projectRoot, warnings = []) {
   }
   if (allFiles.length > 50) console.log(`\r  Call graph: ${allFiles.length}/${allFiles.length} files`);
   for (const edge of callGraphEdges) {
-    const [targetFile, targetName] = edge.target.split("::");
-    const [sourceFile, sourceName] = edge.source.split("::");
+    const targetSep = edge.target.indexOf("::");
+    const sourceSep = edge.source.indexOf("::");
+    if (targetSep === -1 || sourceSep === -1) continue;
+    const targetFile = edge.target.substring(0, targetSep);
+    const targetName = edge.target.substring(targetSep + 2);
+    const sourceFile = edge.source.substring(0, sourceSep);
+    const sourceName = edge.source.substring(sourceSep + 2);
     const file = findFileByPath(targetFile);
     if (file) {
       const sym = file.symbols.find((s) => s.name === targetName);
@@ -2567,7 +2574,9 @@ function buildCallGraph(modules, rootFiles, projectRoot, warnings = []) {
     for (const id of [edge.source, edge.target]) {
       if (!nodeSet.has(id)) {
         nodeSet.add(id);
-        const [filePath, symName] = id.split("::");
+        const sep = id.indexOf("::");
+        const filePath = sep !== -1 ? id.substring(0, sep) : id;
+        const symName = sep !== -1 ? id.substring(sep + 2) : id;
         const file = findFileByPath(filePath);
         const sym = file?.symbols.find((s) => s.name === symName);
         nodes.push({
@@ -2584,7 +2593,10 @@ function buildCallGraph(modules, rootFiles, projectRoot, warnings = []) {
     edges: callGraphEdges,
     stats: {
       totalCalls: callGraphEdges.length,
-      filesWithCalls: new Set(callGraphEdges.map((e) => e.source.split("::")[0])).size,
+      filesWithCalls: new Set(callGraphEdges.map((e) => {
+        const i = e.source.indexOf("::");
+        return i !== -1 ? e.source.substring(0, i) : e.source;
+      })).size,
       uniqueCallers: new Set(callGraphEdges.map((e) => e.source)).size,
       uniqueCallees: new Set(callGraphEdges.map((e) => e.target)).size,
       exact: callGraphEdges.filter((e) => e.confidence === "exact").length,
@@ -3663,7 +3675,16 @@ async function walkDir(dir, extraIgnore = []) {
   const ignore = /* @__PURE__ */ new Set([...DEFAULT_IGNORE, ...extraIgnore]);
   const gitignorePatterns = await loadGitignore(dir);
   const results = [];
+  const visitedDirs = /* @__PURE__ */ new Set();
   async function recurse(current) {
+    let realDir;
+    try {
+      realDir = await (0, import_promises.realpath)(current);
+    } catch {
+      return;
+    }
+    if (visitedDirs.has(realDir)) return;
+    visitedDirs.add(realDir);
     const entries = await (0, import_promises.readdir)(current, { withFileTypes: true });
     const promises = [];
     for (const entry of entries) {
@@ -3844,6 +3865,21 @@ async function loadCache(projectRoot) {
     return createEmptyCache();
   }
 }
+async function checkTsconfigHash(cache, projectRoot) {
+  try {
+    const raw = await (0, import_promises2.readFile)((0, import_path7.resolve)(projectRoot, "tsconfig.json"), "utf-8");
+    const hash = hashContent(raw);
+    if (cache.tsconfigHash && cache.tsconfigHash !== hash) {
+      cache.files = {};
+    }
+    cache.tsconfigHash = hash;
+  } catch {
+    if (cache.tsconfigHash) {
+      cache.files = {};
+      delete cache.tsconfigHash;
+    }
+  }
+}
 async function saveCache(projectRoot, cache) {
   try {
     const path5 = (0, import_path7.resolve)(projectRoot, CACHE_FILE);
@@ -4001,6 +4037,7 @@ async function analyze(projectRoot, options = {}) {
   } catch {
   }
   const cache = await loadCache(projectRoot);
+  await checkTsconfigHash(cache, projectRoot);
   const moduleMap = /* @__PURE__ */ new Map();
   let cacheHits = 0;
   for (let i = 0; i < supportedFiles.length; i += BATCH_SIZE) {
@@ -4473,7 +4510,6 @@ User question: ${request.prompt}`
       }
     }
   });
-  participant.iconPath = vscode3.Uri.joinPath(context.extensionUri, "media", "icon.png");
   context.subscriptions.push(participant);
 }
 function buildBaselineContext(result) {
@@ -4548,7 +4584,7 @@ function buildImpactContext(prompt, result) {
       context += `  - ${dep}
 `;
     }
-    context += `- Risk score: ${impact.riskScore || "N/A"}
+    context += `- Risk level: ${impact.riskLevel || "N/A"}
 `;
   } else {
     const sorted = keys.map((k) => ({ path: k, count: impactMap[k].transitiveDependents?.length || 0 })).sort((a, b) => b.count - a.count).slice(0, 10);
@@ -4569,18 +4605,18 @@ Total edges: ${callGraph.edges?.length || 0}
 `;
   const edges = callGraph.edges || [];
   const relevantEdges = edges.filter(
-    (e) => prompt.includes(e.from?.toLowerCase()) || prompt.includes(e.to?.toLowerCase())
+    (e) => prompt.includes(e.source?.toLowerCase()) || prompt.includes(e.target?.toLowerCase())
   );
   if (relevantEdges.length > 0) {
     context += "Relevant call relationships:\n";
     for (const edge of relevantEdges.slice(0, 30)) {
-      context += `- ${edge.from} \u2192 ${edge.to} (${edge.confidence || "unknown"} confidence)
+      context += `- ${edge.source} \u2192 ${edge.target} (${edge.confidence || "unknown"} confidence)
 `;
     }
   } else {
     context += "Sample call relationships:\n";
     for (const edge of edges.slice(0, 20)) {
-      context += `- ${edge.from} \u2192 ${edge.to}
+      context += `- ${edge.source} \u2192 ${edge.target}
 `;
     }
   }
@@ -4638,6 +4674,8 @@ var SUPPORTED_EXTENSIONS = /* @__PURE__ */ new Set([
 ]);
 function setupFileWatcher(context, analyzer2, webviewManager2) {
   let debounceTimer = null;
+  const disposables = [];
+  const workspaceRoot = vscode4.workspace.workspaceFolders?.[0]?.uri.fsPath;
   const mergeIdeaStructure2 = (result) => {
     if (!workspaceRoot || !result) return;
     const ideaFile = path3.join(workspaceRoot, ".codesight", "idea-structure.json");
@@ -4664,11 +4702,9 @@ function setupFileWatcher(context, analyzer2, webviewManager2) {
       }
     }, 500);
   });
-  context.subscriptions.push(saveDisposable);
-  const workspaceRoot = vscode4.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  disposables.push(saveDisposable);
   if (workspaceRoot) {
     const ideaFile = path3.join(workspaceRoot, ".codesight", "idea-structure.json");
-    const ideaDir = path3.join(workspaceRoot, ".codesight");
     const pattern = new vscode4.RelativePattern(workspaceRoot, ".codesight/idea-structure.json");
     const ideaWatcher = vscode4.workspace.createFileSystemWatcher(pattern);
     const loadIdeaStructure = () => {
@@ -4687,13 +4723,16 @@ function setupFileWatcher(context, analyzer2, webviewManager2) {
         console.error("[codesight] Failed to load idea structure:", err.message);
       }
     };
-    context.subscriptions.push(
+    disposables.push(
       ideaWatcher.onDidCreate(loadIdeaStructure),
       ideaWatcher.onDidChange(loadIdeaStructure),
       ideaWatcher
     );
     loadIdeaStructure();
   }
+  const disposable = vscode4.Disposable.from(...disposables);
+  context.subscriptions.push(disposable);
+  return disposable;
 }
 
 // src/idea-layer.ts
@@ -4912,6 +4951,7 @@ var fs2 = __toESM(require("fs"));
 var path4 = __toESM(require("path"));
 var analyzer = null;
 var webviewManager;
+var fileWatcherDisposable = null;
 var activeTimers = [];
 function getWorkspaceRoot() {
   return vscode6.workspace.workspaceFolders?.[0]?.uri.fsPath || null;
@@ -5023,7 +5063,7 @@ function activate(context) {
   const root = getWorkspaceRoot();
   if (root) {
     analyzer = new AnalyzerWrapper(root);
-    setupFileWatcher(context, analyzer, webviewManager);
+    fileWatcherDisposable = setupFileWatcher(context, analyzer, webviewManager);
     try {
       if (vscode6.chat?.createChatParticipant) {
         registerChatParticipant(context, analyzer);
@@ -5035,9 +5075,13 @@ function activate(context) {
   context.subscriptions.push(
     vscode6.workspace.onDidChangeWorkspaceFolders(() => {
       const newRoot = getWorkspaceRoot();
+      if (fileWatcherDisposable) {
+        fileWatcherDisposable.dispose();
+        fileWatcherDisposable = null;
+      }
       if (newRoot) {
         analyzer = new AnalyzerWrapper(newRoot);
-        setupFileWatcher(context, analyzer, webviewManager);
+        fileWatcherDisposable = setupFileWatcher(context, analyzer, webviewManager);
       } else {
         analyzer = null;
       }
@@ -5146,13 +5190,23 @@ User: ${message}`;
       fs2.unlinkSync(responseFile);
     } catch (_) {
     }
-    const poll = setInterval(() => {
+    let poll;
+    let timeout;
+    const cleanup = () => {
+      clearInterval(poll);
+      clearTimeout(timeout);
+      const pollIdx = activeTimers.indexOf(poll);
+      if (pollIdx !== -1) activeTimers.splice(pollIdx, 1);
+      const timeoutIdx = activeTimers.indexOf(timeout);
+      if (timeoutIdx !== -1) activeTimers.splice(timeoutIdx, 1);
+    };
+    poll = setInterval(() => {
       try {
         if (!fs2.existsSync(responseFile)) return;
         const raw = fs2.readFileSync(responseFile, "utf-8");
         const data = JSON.parse(raw);
         if (data.timestamp && data.timestamp > requestTimestamp - 1e3) {
-          clearInterval(poll);
+          cleanup();
           webview.postMessage({ type: "chatResponse", text: data.text, originalMessage: message });
           try {
             fs2.unlinkSync(responseFile);
@@ -5163,8 +5217,8 @@ User: ${message}`;
       }
     }, 1e3);
     activeTimers.push(poll);
-    const timeout = setTimeout(() => {
-      clearInterval(poll);
+    timeout = setTimeout(() => {
+      cleanup();
     }, 18e4);
     activeTimers.push(timeout);
   } else {

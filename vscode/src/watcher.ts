@@ -16,8 +16,11 @@ export function setupFileWatcher(
   context: vscode.ExtensionContext,
   analyzer: AnalyzerWrapper,
   webviewManager: WebviewManager
-) {
+): vscode.Disposable {
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  const disposables: vscode.Disposable[] = [];
+
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
   // Helper: merge idea structure from file into analysis result
   const mergeIdeaStructure = (result: any) => {
@@ -49,14 +52,12 @@ export function setupFileWatcher(
     }, 500);
   });
 
-  context.subscriptions.push(saveDisposable);
+  disposables.push(saveDisposable);
 
   // Watch for .codesight/idea-structure.json → load idea layer
   // This is the bridge from Claude Code MCP to the VS Code webview
-  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (workspaceRoot) {
     const ideaFile = path.join(workspaceRoot, '.codesight', 'idea-structure.json');
-    const ideaDir = path.join(workspaceRoot, '.codesight');
 
     // Create a file system watcher for the idea structure file
     const pattern = new vscode.RelativePattern(workspaceRoot, '.codesight/idea-structure.json');
@@ -82,7 +83,7 @@ export function setupFileWatcher(
       }
     };
 
-    context.subscriptions.push(
+    disposables.push(
       ideaWatcher.onDidCreate(loadIdeaStructure),
       ideaWatcher.onDidChange(loadIdeaStructure),
       ideaWatcher
@@ -91,4 +92,8 @@ export function setupFileWatcher(
     // Also load on startup if the file already exists
     loadIdeaStructure();
   }
+
+  const disposable = vscode.Disposable.from(...disposables);
+  context.subscriptions.push(disposable);
+  return disposable;
 }

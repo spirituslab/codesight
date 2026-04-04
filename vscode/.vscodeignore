@@ -2,3 +2,5 @@ src/**
 tsconfig.json
 build.mjs
 .vscode/**
+package-lock.json
+node_modules/.package-lock.json

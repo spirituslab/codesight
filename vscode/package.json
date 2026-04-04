@@ -55,6 +55,7 @@
   "scripts": {
     "build": "node build.mjs",
     "watch": "npm run build -- --watch",
+    "prepackage": "npm run build",
     "package": "vsce package"
   },
   "dependencies": {
