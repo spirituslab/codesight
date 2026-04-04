@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
 import { AnalyzerWrapper } from './analyzer';
 import { WebviewManager } from './webview';
 
@@ -17,11 +19,11 @@ export function setupFileWatcher(
 ) {
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const disposable = vscode.workspace.onDidSaveTextDocument((document) => {
+  // Watch for source file saves → re-analyze
+  const saveDisposable = vscode.workspace.onDidSaveTextDocument((document) => {
     const ext = '.' + document.fileName.split('.').pop()?.toLowerCase();
     if (!SUPPORTED_EXTENSIONS.has(ext)) return;
 
-    // Debounce rapid saves (500ms)
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(async () => {
       debounceTimer = null;
@@ -32,5 +34,45 @@ export function setupFileWatcher(
     }, 500);
   });
 
-  context.subscriptions.push(disposable);
+  context.subscriptions.push(saveDisposable);
+
+  // Watch for .codesight/idea-structure.json → load idea layer
+  // This is the bridge from Claude Code MCP to the VS Code webview
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (workspaceRoot) {
+    const ideaFile = path.join(workspaceRoot, '.codesight', 'idea-structure.json');
+    const ideaDir = path.join(workspaceRoot, '.codesight');
+
+    // Create a file system watcher for the idea structure file
+    const pattern = new vscode.RelativePattern(workspaceRoot, '.codesight/idea-structure.json');
+    const ideaWatcher = vscode.workspace.createFileSystemWatcher(pattern);
+
+    const loadIdeaStructure = () => {
+      try {
+        if (!fs.existsSync(ideaFile)) return;
+        const content = fs.readFileSync(ideaFile, 'utf-8');
+        const ideaStructure = JSON.parse(content);
+
+        if (!ideaStructure.nodes) return;
+
+        // Merge with existing analysis result
+        const result = analyzer.getResult();
+        if (result) {
+          result.ideaStructure = ideaStructure;
+          webviewManager.postMessage({ type: 'updateData', data: result });
+          console.log(`[codesight] Loaded idea layer: ${ideaStructure.nodes.length} concepts`);
+        }
+      } catch (err: any) {
+        console.error('[codesight] Failed to load idea structure:', err.message);
+      }
+    };
+
+    ideaWatcher.onDidCreate(loadIdeaStructure);
+    ideaWatcher.onDidChange(loadIdeaStructure);
+
+    context.subscriptions.push(ideaWatcher);
+
+    // Also load on startup if the file already exists
+    loadIdeaStructure();
+  }
 }

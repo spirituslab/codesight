@@ -435,6 +435,8 @@ function isCallChainQuestion(prompt) {
 
 // src/watcher.ts
 var vscode4 = __toESM(require("vscode"));
+var fs = __toESM(require("fs"));
+var path3 = __toESM(require("path"));
 var SUPPORTED_EXTENSIONS = /* @__PURE__ */ new Set([
   ".ts",
   ".tsx",
@@ -455,7 +457,7 @@ var SUPPORTED_EXTENSIONS = /* @__PURE__ */ new Set([
 ]);
 function setupFileWatcher(context, analyzer2, webviewManager2) {
   let debounceTimer = null;
-  const disposable = vscode4.workspace.onDidSaveTextDocument((document) => {
+  const saveDisposable = vscode4.workspace.onDidSaveTextDocument((document) => {
     const ext = "." + document.fileName.split(".").pop()?.toLowerCase();
     if (!SUPPORTED_EXTENSIONS.has(ext)) return;
     if (debounceTimer) clearTimeout(debounceTimer);
@@ -467,7 +469,34 @@ function setupFileWatcher(context, analyzer2, webviewManager2) {
       }
     }, 500);
   });
-  context.subscriptions.push(disposable);
+  context.subscriptions.push(saveDisposable);
+  const workspaceRoot = vscode4.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (workspaceRoot) {
+    const ideaFile = path3.join(workspaceRoot, ".codesight", "idea-structure.json");
+    const ideaDir = path3.join(workspaceRoot, ".codesight");
+    const pattern = new vscode4.RelativePattern(workspaceRoot, ".codesight/idea-structure.json");
+    const ideaWatcher = vscode4.workspace.createFileSystemWatcher(pattern);
+    const loadIdeaStructure = () => {
+      try {
+        if (!fs.existsSync(ideaFile)) return;
+        const content = fs.readFileSync(ideaFile, "utf-8");
+        const ideaStructure = JSON.parse(content);
+        if (!ideaStructure.nodes) return;
+        const result = analyzer2.getResult();
+        if (result) {
+          result.ideaStructure = ideaStructure;
+          webviewManager2.postMessage({ type: "updateData", data: result });
+          console.log(`[codesight] Loaded idea layer: ${ideaStructure.nodes.length} concepts`);
+        }
+      } catch (err) {
+        console.error("[codesight] Failed to load idea structure:", err.message);
+      }
+    };
+    ideaWatcher.onDidCreate(loadIdeaStructure);
+    ideaWatcher.onDidChange(loadIdeaStructure);
+    context.subscriptions.push(ideaWatcher);
+    loadIdeaStructure();
+  }
 }
 
 // src/idea-layer.ts
@@ -480,16 +509,21 @@ async function generateIdeaLayer(analyzer2, webviewManager2) {
   }
   let model;
   try {
-    const models = await vscode5.lm.selectChatModels();
-    if (!models || models.length === 0) {
+    const allModels = await vscode5.lm.selectChatModels();
+    console.log(
+      `[codesight] Available models (${allModels?.length || 0}):`,
+      allModels?.map((m) => `${m.name} (${m.vendor}, ${m.family}, ${m.id})`)
+    );
+    if (!allModels || allModels.length === 0) {
       vscode5.window.showErrorMessage(
-        "Codesight: No language model available. Install GitHub Copilot, Claude, or another LLM extension."
+        "Codesight: No language model available. Make sure your LLM extension (Copilot, Claude, etc.) is active in this window."
       );
       return;
     }
-    model = models[0];
+    model = allModels[0];
     console.log(`[codesight] Using model: ${model.name} (${model.vendor})`);
   } catch (err) {
+    console.error("[codesight] LM API error:", err);
     vscode5.window.showErrorMessage(`Codesight: Failed to access language model: ${err.message}`);
     return;
   }

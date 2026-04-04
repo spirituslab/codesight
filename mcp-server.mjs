@@ -15,7 +15,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { resolve } from "path";
+import { resolve, join } from "path";
+import { writeFileSync, mkdirSync } from "fs";
 import { analyze } from "./src/analyzer/index.mjs";
 
 const projectRoot = resolve(process.argv[2] || process.cwd());
@@ -329,6 +330,150 @@ server.tool(
         }, null, 2),
       }],
     };
+  }
+);
+
+// ─── Tool: generate_idea_structure ────────────────────────────────
+
+server.tool(
+  "codesight_generate_idea_structure",
+  `Generate a conceptual "idea layer" for the project. This returns the project's structural data formatted as a prompt. You (the LLM) should then create the idea structure JSON and call codesight_set_idea_layer to push it to the VS Code graph.
+
+The idea structure is a conceptual map: nodes represent concepts/features/responsibilities, edges represent relationships between them, and codeRefs link each concept to the actual code that implements it.`,
+  {},
+  async () => {
+    const result = await getAnalysis();
+
+    const modulesSummary = result.modules.map(m => {
+      const desc = m.explanation || m.description || '';
+      const files = m.files.slice(0, 8).map(f => `    ${f.path}`).join('\n');
+      return `  ${m.name} (${m.files.length} files, ${m.lineCount} lines): ${desc}\n${files}`;
+    }).join('\n\n');
+
+    const edgesSummary = result.edges
+      .filter(e => e.target !== 'external')
+      .slice(0, 30)
+      .map(e => `  ${e.source} → ${e.target} (${e.weight} imports)`)
+      .join('\n');
+
+    const keyFilesSummary = (result.keyFiles || []).slice(0, 15).map(f =>
+      `  ${f.path} (imported by ${f.importedByCount} files${f.isEntryPoint ? ', entry point' : ''})`
+    ).join('\n');
+
+    const validModules = result.modules.map(m => m.name);
+    const validFiles = result.modules.flatMap(m => m.files.map(f => f.path));
+
+    return {
+      content: [{
+        type: "text",
+        text: `Create an idea structure for this project. After generating it, call codesight_set_idea_layer with the JSON.
+
+Project: ${result.projectName}
+Languages: ${result.languages.join(', ')}
+
+Modules:
+${modulesSummary}
+
+Dependencies:
+${edgesSummary}
+
+Key files:
+${keyFilesSummary}
+
+VALID module names: ${JSON.stringify(validModules)}
+VALID file paths (first 50): ${JSON.stringify(validFiles.slice(0, 50))}
+
+Respond by calling codesight_set_idea_layer with a JSON object containing:
+{
+  "projectSummary": "2-3 sentence description",
+  "nodes": [
+    {
+      "id": "idea:<kebab-case-id>",
+      "label": "Human Readable Name",
+      "description": "1-2 sentence description",
+      "codeRefs": [
+        { "type": "module", "name": "<module-name>" },
+        { "type": "file", "path": "<file-path>" }
+      ]
+    }
+  ],
+  "edges": [
+    { "source": "idea:<id>", "target": "idea:<id>", "label": "relationship" }
+  ]
+}
+
+Create 5-15 idea nodes. Only use module names and file paths from the lists above. Keep it conceptual — group by purpose, not file structure.`,
+      }],
+    };
+  }
+);
+
+// ─── Tool: set_idea_layer ────────────────────────────────────────
+
+server.tool(
+  "codesight_set_idea_layer",
+  "Push an idea structure to the VS Code graph visualization. The idea structure JSON will be written to .codesight/idea-structure.json, and the VS Code extension will pick it up and render the idea layer overlay.",
+  {
+    ideaStructure: z.string().describe("The idea structure JSON string containing projectSummary, nodes (with id, label, description, codeRefs), and edges"),
+  },
+  async ({ ideaStructure }) => {
+    try {
+      const parsed = JSON.parse(ideaStructure);
+
+      if (!parsed.nodes || !Array.isArray(parsed.nodes)) {
+        return {
+          content: [{ type: "text", text: "Error: ideaStructure must contain a 'nodes' array." }],
+        };
+      }
+
+      // Validate code references
+      const result = await getAnalysis();
+      const validModules = new Set(result.modules.map(m => m.name));
+      const validFiles = new Set(result.modules.flatMap(m => m.files.map(f => f.path)));
+
+      let removedRefs = 0;
+      let totalRefs = 0;
+
+      for (const node of parsed.nodes) {
+        if (node.codeRefs) {
+          totalRefs += node.codeRefs.length;
+          node.codeRefs = node.codeRefs.filter(ref => {
+            if (ref.type === 'module' && validModules.has(ref.name)) return true;
+            if (ref.type === 'file' && validFiles.has(ref.path)) return true;
+            if (ref.type === 'symbol') return true; // trust symbol refs
+            removedRefs++;
+            return false;
+          });
+        }
+      }
+
+      // Validate edges
+      const nodeIds = new Set(parsed.nodes.map(n => n.id));
+      if (parsed.edges) {
+        parsed.edges = parsed.edges.filter(e => nodeIds.has(e.source) && nodeIds.has(e.target));
+      }
+
+      // Write to .codesight/idea-structure.json
+      const outDir = join(projectRoot, '.codesight');
+      mkdirSync(outDir, { recursive: true });
+      const outPath = join(outDir, 'idea-structure.json');
+      writeFileSync(outPath, JSON.stringify(parsed, null, 2));
+
+      const refInfo = removedRefs > 0
+        ? ` (removed ${removedRefs}/${totalRefs} invalid code references)`
+        : '';
+
+      return {
+        content: [{
+          type: "text",
+          text: `Idea layer saved with ${parsed.nodes.length} concepts and ${parsed.edges?.length || 0} relationships${refInfo}. The VS Code extension will pick it up and render the overlay.`,
+        }],
+      };
+    } catch (err) {
+      return {
+        content: [{ type: "text", text: `Error parsing idea structure: ${err.message}` }],
+      };
+    }
   }
 );
 

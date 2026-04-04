@@ -21,16 +21,21 @@ export async function generateIdeaLayer(
   // Find an available language model
   let model: vscode.LanguageModelChat;
   try {
-    const models = await vscode.lm.selectChatModels();
-    if (!models || models.length === 0) {
+    // Log all available models for debugging
+    const allModels = await vscode.lm.selectChatModels();
+    console.log(`[codesight] Available models (${allModels?.length || 0}):`,
+      allModels?.map((m: any) => `${m.name} (${m.vendor}, ${m.family}, ${m.id})`));
+
+    if (!allModels || allModels.length === 0) {
       vscode.window.showErrorMessage(
-        'Codesight: No language model available. Install GitHub Copilot, Claude, or another LLM extension.'
+        'Codesight: No language model available. Make sure your LLM extension (Copilot, Claude, etc.) is active in this window.'
       );
       return;
     }
-    model = models[0];
+    model = allModels[0];
     console.log(`[codesight] Using model: ${model.name} (${model.vendor})`);
   } catch (err: any) {
+    console.error('[codesight] LM API error:', err);
     vscode.window.showErrorMessage(`Codesight: Failed to access language model: ${err.message}`);
     return;
   }
