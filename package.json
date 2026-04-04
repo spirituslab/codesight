@@ -4,7 +4,8 @@
   "description": "Universal code structure visualization via static analysis",
   "type": "module",
   "bin": {
-    "codesight": "./analyze.mjs"
+    "codesight": "./analyze.mjs",
+    "codesight-mcp": "./mcp-server.mjs"
   },
   "scripts": {
     "analyze": "node analyze.mjs",
@@ -33,6 +34,7 @@
     "vitest": "^3.1.1"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "tree-sitter": "^0.21.1",
     "tree-sitter-c": "^0.21.4",
     "tree-sitter-cpp": "^0.22.3",

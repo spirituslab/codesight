@@ -37,7 +37,16 @@
           "group": "navigation"
         }
       ]
-    }
+    },
+    "chatParticipants": [
+      {
+        "id": "codesight",
+        "name": "codesight",
+        "fullName": "Codesight",
+        "description": "Ask about code structure, dependencies, and impact analysis",
+        "isSticky": false
+      }
+    ]
   },
   "scripts": {
     "build": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node",

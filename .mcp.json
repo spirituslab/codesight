@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "codesight": {
+      "command": "node",
+      "args": ["mcp-server.mjs", "."],
+      "cwd": "/home/andywang/Documents/Projects/codesight"
+    }
+  }
+}
