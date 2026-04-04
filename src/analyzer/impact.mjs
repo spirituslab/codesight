@@ -7,16 +7,23 @@
 export function computeImpact(modules, rootFiles, callGraph) {
   const allFiles = [...rootFiles, ...modules.flatMap(m => m.files)];
 
+  // Build path lookup maps for O(1) file resolution
+  const fileByPath = new Map();
+  const fileByPathNoExt = new Map();
+  for (const file of allFiles) {
+    fileByPath.set(file.path, file);
+    fileByPathNoExt.set(file.path.replace(/\.[^.]+$/, ''), file);
+  }
+  function findFile(path) {
+    return fileByPath.get(path) || fileByPathNoExt.get(path) || null;
+  }
+
   // Build file-level reverse dependency map
   const fileDepMap = new Map(); // file → Set of files that import it
   for (const file of allFiles) {
     for (const imp of file.imports) {
       if (imp.resolvedModule === 'external' || !imp.resolvedPath) continue;
-      // Find target file
-      const target = allFiles.find(f =>
-        f.path === imp.resolvedPath ||
-        f.path.replace(/\.[^.]+$/, '') === imp.resolvedPath
-      );
+      const target = findFile(imp.resolvedPath);
       if (target) {
         if (!fileDepMap.has(target.path)) fileDepMap.set(target.path, new Set());
         fileDepMap.get(target.path).add(file.path);

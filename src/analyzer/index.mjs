@@ -312,12 +312,16 @@ export async function analyze(projectRoot, options = {}) {
   const edgeMap = new Map();
   const allFileInfos = [...rootFiles, ...modules.flatMap(m => m.files)];
 
+  // Build file → module name lookup from refined modules
+  const fileToModule = new Map();
+  for (const [name, data] of refinedModuleMap.entries()) {
+    for (const f of data.files) {
+      fileToModule.set(f.path, name);
+    }
+  }
+
   for (const file of allFileInfos) {
-    const sourceModule = moduleMap.has(file.path.split("/")[0])
-      ? file.path.split("/")[0]
-      : "root";
-    // Find which module this file belongs to
-    const srcMod = modules.find(m => m.files.includes(file))?.name || "root";
+    const srcMod = fileToModule.get(file.path) || "root";
 
     for (const imp of file.imports) {
       const targetModule = imp.resolvedModule;

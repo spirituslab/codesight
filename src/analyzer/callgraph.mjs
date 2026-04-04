@@ -9,6 +9,17 @@ import { getLanguage } from "../languages/index.mjs";
 export function buildCallGraph(modules, rootFiles, projectRoot, warnings = []) {
   const allFiles = [...rootFiles, ...modules.flatMap(m => m.files)];
 
+  // Build path lookup maps for O(1) file resolution
+  const fileByPath = new Map();
+  const fileByPathNoExt = new Map();
+  for (const file of allFiles) {
+    fileByPath.set(file.path, file);
+    fileByPathNoExt.set(file.path.replace(/\.[^.]+$/, ''), file);
+  }
+  function findFileByPath(path) {
+    return fileByPath.get(path) || fileByPathNoExt.get(path) || null;
+  }
+
   // Build a global symbol index: symbolName → [{ filePath, symbol }]
   const symbolIndex = new Map();
   for (const file of allFiles) {
@@ -168,14 +179,12 @@ export function buildCallGraph(modules, rootFiles, projectRoot, warnings = []) {
     const [targetFile, targetName] = edge.target.split('::');
     const [sourceFile, sourceName] = edge.source.split('::');
 
-    for (const file of allFiles) {
-      if (file.path === targetFile || file.path.replace(/\.[^.]+$/, '') === targetFile) {
-        const sym = file.symbols.find(s => s.name === targetName);
-        if (sym) {
-          if (!sym.calledBy) sym.calledBy = [];
-          sym.calledBy.push({ symbol: sourceName, file: sourceFile, line: edge.line });
-          break;
-        }
+    const file = findFileByPath(targetFile);
+    if (file) {
+      const sym = file.symbols.find(s => s.name === targetName);
+      if (sym) {
+        if (!sym.calledBy) sym.calledBy = [];
+        sym.calledBy.push({ symbol: sourceName, file: sourceFile, line: edge.line });
       }
     }
   }
@@ -188,7 +197,7 @@ export function buildCallGraph(modules, rootFiles, projectRoot, warnings = []) {
       if (!nodeSet.has(id)) {
         nodeSet.add(id);
         const [filePath, symName] = id.split('::');
-        const file = allFiles.find(f => f.path === filePath || f.path.replace(/\.[^.]+$/, '') === filePath);
+        const file = findFileByPath(filePath);
         const sym = file?.symbols.find(s => s.name === symName);
         nodes.push({
           id,

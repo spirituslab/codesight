@@ -24,7 +24,10 @@ export function buildCrossReferences(modules, rootFiles) {
         if (!defs) continue;
         // Prefer definition in the resolved path, else first match
         const match = defs.find(d =>
-          imp.resolvedPath && d.filePath.startsWith(imp.resolvedPath)
+          imp.resolvedPath && (
+            d.filePath === imp.resolvedPath ||
+            d.filePath.replace(/\.[^./]+$/, '') === imp.resolvedPath.replace(/\.[^./]+$/, '')
+          )
         ) || defs[0];
         if (match && !match.symbol.usedBy.includes(file.path)) {
           match.symbol.usedBy.push(file.path);

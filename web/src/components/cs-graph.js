@@ -165,7 +165,8 @@ export class CsGraph extends LitElement {
     this._cyIdea = null;
     this._hasIdeas = false;
     this._mappingRAF = null;
-    this._rendering = false;
+    this._updatingStore = false;
+    this._activeGroup = null; // { name, modules: [] } when drilled into a module group
     this._boundStoreHandler = this._onStoreChanged.bind(this);
   }
 
@@ -220,34 +221,44 @@ export class CsGraph extends LitElement {
 
   // ─── Store Watcher ────────────────────────────────────────────────
 
+  /** Set store state without triggering re-entrant _syncViewToState */
+  _setStoreState(updates) {
+    this._updatingStore = true;
+    if (typeof updates === 'object' && !Array.isArray(updates)) {
+      store.setBatch(updates);
+    }
+    this._updatingStore = false;
+  }
+
+  _setStoreSingle(key, value) {
+    this._updatingStore = true;
+    store.set(key, value);
+    this._updatingStore = false;
+  }
+
   _onStoreChanged(e) {
     const { key, keys } = e.detail;
     const changed = keys || [key];
     if (changed.includes('DATA')) {
       this._hasIdeas = !!store.state.DATA?.ideaStructure;
     }
-    // Only re-render if we're not already in a render cycle
-    if (this._rendering) return;
+    // Skip re-render if we caused this state change
+    if (this._updatingStore) return;
     if (changed.includes('currentLevel') || changed.includes('currentModule') || changed.includes('currentFile')) {
       this._syncViewToState();
     }
   }
 
   _syncViewToState() {
-    this._rendering = true;
-    try {
-      const { currentLevel, currentModule, currentFile, currentSubdir } = store.state;
-      if (currentLevel === 'modules') {
-        this._renderModuleView();
-      } else if (currentLevel === 'symbols' && currentFile) {
-        this._buildSymbolGraph(currentFile);
-      } else if (currentLevel === 'files' && currentModule) {
-        this._renderFileView(currentModule, currentSubdir);
-      } else if (currentLevel === 'subdirs' && currentModule) {
-        this._drillToModule(currentModule);
-      }
-    } finally {
-      this._rendering = false;
+    const { currentLevel, currentModule, currentFile, currentSubdir } = store.state;
+    if (currentLevel === 'modules') {
+      this._renderModuleView();
+    } else if (currentLevel === 'symbols' && currentFile) {
+      this._buildSymbolGraph(currentFile);
+    } else if (currentLevel === 'files' && currentModule) {
+      this._renderFileView(currentModule, currentSubdir);
+    } else if (currentLevel === 'subdirs' && currentModule) {
+      this._drillToModule(currentModule);
     }
   }
 
@@ -269,7 +280,13 @@ export class CsGraph extends LitElement {
     const level = store.state.currentLevel;
 
     if (level === 'modules') {
-      this._drillToModule(id);
+      if (nodeType === 'group') {
+        this._activeGroup = node.data('info');
+        store.set('activeGroup', this._activeGroup);
+        this._renderGroupDrillDown();
+      } else {
+        this._drillToModule(id);
+      }
     } else if (level === 'subdirs') {
       const info = node.data('info');
       if (info && info.name) {
@@ -285,12 +302,18 @@ export class CsGraph extends LitElement {
     } else if (level === 'files') {
       this._drillToSymbols(id);
     } else if (level === 'symbols') {
-      // Dispatch symbol-selected for sidebar to handle
-      if (nodeType === 'export' || nodeType === 'import' || nodeType === 'file') {
-        this.dispatchEvent(new CustomEvent('symbol-selected', {
-          detail: { nodeType, info: node.data('info'), file: store.state.currentFile },
-          bubbles: true, composed: true,
-        }));
+      const info = node.data('info');
+      if (nodeType === 'import') {
+        // Navigate to the imported file's symbol view (cross-file drill-down)
+        if (info && info.resolvedPath && info.resolvedModule !== 'external') {
+          this.navigateToFile(info.resolvedPath);
+        }
+      } else if (nodeType === 'export') {
+        // Select the symbol — explorer sidebar shows its details
+        store.set('selectedSymbol', info || null);
+      } else if (nodeType === 'file') {
+        // Center file node — clear symbol selection to show file overview
+        store.set('selectedSymbol', null);
       }
     }
   }
@@ -466,7 +489,7 @@ export class CsGraph extends LitElement {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (!this._cyCode || this._cyCode.nodes().length === 0) return;
 
-    const bb = this._cyCode.extent();
+    const bb = this._cyCode.elements().boundingBox();
     const nodes = this._cyCode.nodes();
     const scaleX = canvas.width / (bb.w || 1);
     const scaleY = canvas.height / (bb.h || 1);
@@ -568,16 +591,8 @@ export class CsGraph extends LitElement {
 
   // ─── Level 1: Module Overview ─────────────────────────────────────
 
-  _renderModuleView() {
-    store.setBatch({
-      currentLevel: 'modules',
-      currentModule: null,
-      currentSubdir: null,
-      currentFile: null,
-    });
-
+  _getAllModules() {
     const DATA = store.state.DATA;
-    const elements = [];
     const allModules = [...DATA.modules];
     if (DATA.rootFiles && DATA.rootFiles.length > 0) {
       allModules.push({
@@ -588,23 +603,133 @@ export class CsGraph extends LitElement {
         files: DATA.rootFiles,
       });
     }
+    return allModules;
+  }
 
+  _groupModules(allModules) {
+    const groups = new Map();
     for (const mod of allModules) {
-      const w = Math.max(40, Math.min(110, 15 * Math.log2(mod.lineCount + 1)));
-      const color = getColor(mod.name);
+      const slash = mod.name.indexOf('/');
+      const parent = slash !== -1 ? mod.name.substring(0, slash) : null;
+      if (parent) {
+        if (!groups.has(parent)) groups.set(parent, { name: parent, standalone: null, modules: [], fileCount: 0, lineCount: 0 });
+        const g = groups.get(parent);
+        g.modules.push(mod);
+        g.fileCount += mod.fileCount;
+        g.lineCount += mod.lineCount;
+      } else {
+        if (!groups.has(mod.name)) groups.set(mod.name, { name: mod.name, standalone: null, modules: [], fileCount: 0, lineCount: 0 });
+        const g = groups.get(mod.name);
+        g.standalone = mod;
+        g.fileCount += mod.fileCount;
+        g.lineCount += mod.lineCount;
+      }
+    }
+    return groups;
+  }
+
+  _renderModuleView() {
+    this._activeGroup = null;
+    this._setStoreState({
+      currentLevel: 'modules',
+      currentModule: null,
+      currentSubdir: null,
+      currentFile: null,
+      activeGroup: null,
+    });
+
+    const allModules = this._getAllModules();
+    const groups = this._groupModules(allModules);
+    const elements = [];
+
+    // Map module names to their group name (for edge aggregation)
+    const modToGroup = new Map();
+    for (const [groupName, g] of groups) {
+      if (g.standalone) modToGroup.set(g.standalone.name, groupName);
+      for (const sub of g.modules) modToGroup.set(sub.name, groupName);
+    }
+
+    // Build nodes from groups
+    for (const [groupName, g] of groups) {
+      const isGroup = g.modules.length > 0;
+      const w = Math.max(40, Math.min(110, 15 * Math.log2(g.lineCount + 1)));
+      const color = getColor(groupName);
       elements.push({
         data: {
-          id: mod.name, label: mod.name, color,
+          id: groupName,
+          label: isGroup ? groupName + '/' : groupName,
+          color,
           borderColor: shadeColor(color, -40),
-          size: w, sizeH: w * 0.65, info: mod,
+          size: w, sizeH: w * 0.65,
+          nodeType: isGroup ? 'group' : 'module',
+          info: g,
         },
       });
     }
 
-    for (const edge of DATA.edges) {
-      const srcExists = allModules.some(m => m.name === edge.source);
-      const tgtExists = allModules.some(m => m.name === edge.target);
-      if (!srcExists || !tgtExists) continue;
+    // Aggregate edges between groups
+    const edgeMap = new Map();
+    for (const edge of store.state.DATA.edges) {
+      const srcGroup = modToGroup.get(edge.source);
+      const tgtGroup = modToGroup.get(edge.target);
+      if (!srcGroup || !tgtGroup || srcGroup === tgtGroup) continue;
+      const key = `${srcGroup}->${tgtGroup}`;
+      edgeMap.set(key, (edgeMap.get(key) || 0) + edge.weight);
+    }
+    for (const [key, weight] of edgeMap) {
+      const [src, tgt] = key.split('->');
+      elements.push({
+        data: {
+          id: key, source: src, target: tgt,
+          width: Math.max(0.5, Math.min(6, Math.log2(weight + 1))),
+          rawWeight: weight,
+          edgeColor: getColor(src),
+        },
+      });
+    }
+
+    this._cyCode.elements().remove();
+    this._cyCode.add(elements);
+    this._cyCode.layout({
+      name: 'cose', animate: true, animationDuration: 400,
+      nodeDimensionsIncludeLabels: true,
+      idealEdgeLength: () => 180, nodeRepulsion: () => 14000,
+      edgeElasticity: () => 100, gravity: 0.25, numIter: 1000,
+      padding: 50, randomize: true, componentSpacing: 100, nodeOverlap: 20,
+    }).run();
+    this._cyCode.fit(undefined, 50);
+
+    this._renderLegend([...groups.values()].map(g => ({ name: g.name, lineCount: g.lineCount })));
+    this._updateLevelBadge();
+    setTimeout(() => { this._updateMinimap(); this._drawMappingLines(); }, 500);
+  }
+
+  _renderGroupDrillDown() {
+    const group = this._activeGroup;
+    if (!group) return;
+
+    const subModules = [...group.modules];
+    if (group.standalone) subModules.push(group.standalone);
+
+    const elements = [];
+    for (const mod of subModules) {
+      const w = Math.max(35, Math.min(90, 14 * Math.log2(mod.lineCount + 1)));
+      const color = getColor(mod.name);
+      const label = mod.name.includes('/') ? mod.name.split('/').slice(1).join('/') : mod.name;
+      elements.push({
+        data: {
+          id: mod.name, label, color,
+          borderColor: shadeColor(color, -40),
+          size: w, sizeH: w * 0.65,
+          nodeType: 'module', info: mod,
+        },
+      });
+    }
+
+    // Edges between sub-modules only
+    const subSet = new Set(subModules.map(m => m.name));
+    for (const edge of store.state.DATA.edges) {
+      if (!subSet.has(edge.source) || !subSet.has(edge.target)) continue;
       elements.push({
         data: {
           id: `${edge.source}->${edge.target}`,
@@ -621,13 +746,13 @@ export class CsGraph extends LitElement {
     this._cyCode.layout({
       name: 'cose', animate: true, animationDuration: 400,
       nodeDimensionsIncludeLabels: true,
-      idealEdgeLength: () => 180, nodeRepulsion: () => 14000,
-      edgeElasticity: () => 100, gravity: 0.25, numIter: 1000,
-      padding: 50, randomize: true, componentSpacing: 100, nodeOverlap: 20,
+      idealEdgeLength: () => 150, nodeRepulsion: () => 10000,
+      edgeElasticity: () => 80, gravity: 0.3, numIter: 800,
+      padding: 40, randomize: true, componentSpacing: 80, nodeOverlap: 15,
     }).run();
-    this._cyCode.fit(undefined, 50);
+    this._cyCode.fit(undefined, 40);
 
-    this._renderLegend(allModules);
+    this._renderLegend(subModules);
     this._updateLevelBadge();
     setTimeout(() => { this._updateMinimap(); this._drawMappingLines(); }, 500);
   }
@@ -653,7 +778,7 @@ export class CsGraph extends LitElement {
   _drillToModule(moduleName) {
     const mod = this._getModuleData(moduleName);
     if (!mod) return;
-    store.setBatch({
+    this._setStoreState({
       currentModule: moduleName,
       currentSubdir: null,
       currentFile: null,
@@ -664,7 +789,7 @@ export class CsGraph extends LitElement {
   _drillToNestedDir(moduleName, nestedPath) {
     const mod = this._getModuleData(moduleName);
     if (!mod) return;
-    store.setBatch({
+    this._setStoreState({
       currentModule: moduleName,
       currentSubdir: nestedPath,
       currentFile: null,
@@ -674,14 +799,14 @@ export class CsGraph extends LitElement {
     const subdirCount = [...subdirMap.keys()].filter(k => k !== '(root)').length;
 
     if (subdirCount >= 1 && subdirMap.has('(root)') && subdirMap.get('(root)').length > 0) {
-      store.set('currentLevel', 'subdirs');
+      this._setStoreSingle('currentLevel', 'subdirs');
       this._renderSubdirView(mod, subdirMap);
     } else if (subdirCount === 1) {
       const onlyDir = [...subdirMap.keys()].find(k => k !== '(root)');
       const deeper = nestedPath ? nestedPath + '/' + onlyDir : onlyDir;
       this._drillToNestedDir(moduleName, deeper);
     } else if (subdirCount >= 2) {
-      store.set('currentLevel', 'subdirs');
+      this._setStoreSingle('currentLevel', 'subdirs');
       this._renderSubdirView(mod, subdirMap);
     } else {
       this._renderFileView(moduleName, nestedPath);
@@ -762,7 +887,7 @@ export class CsGraph extends LitElement {
   // ─── Level 2b: Files ──────────────────────────────────────────────
 
   _renderFileView(moduleName, nestedPath) {
-    store.setBatch({
+    this._setStoreState({
       currentLevel: 'files',
       currentModule: moduleName,
       currentSubdir: nestedPath,
@@ -860,16 +985,11 @@ export class CsGraph extends LitElement {
     const file = mod.files.find(f => f.path === filePath);
     if (!file) return;
 
-    this._rendering = true;
-    try {
-      store.setBatch({
-        currentLevel: 'symbols',
-        currentFile: file,
-      });
-      this._buildSymbolGraph(file);
-    } finally {
-      this._rendering = false;
-    }
+    this._setStoreState({
+      currentLevel: 'symbols',
+      currentFile: file,
+    });
+    this._buildSymbolGraph(file);
   }
 
   _buildSymbolGraph(file) {
@@ -1271,22 +1391,46 @@ export class CsGraph extends LitElement {
         targetFile = rootFile;
       }
     }
-    if (!targetMod || !targetFile) return;
-
-    // Set all state in one batch to avoid intermediate _syncViewToState
-    // triggering _renderModuleView with stale currentLevel
-    this._rendering = true;
-    try {
-      store.setBatch({
-        currentModule: targetMod,
-        currentSubdir: null,
-        currentLevel: 'symbols',
-        currentFile: targetFile,
-      });
-      this._buildSymbolGraph(targetFile);
-    } finally {
-      this._rendering = false;
+    if (!targetMod || !targetFile) {
+      console.warn(`[codesight] navigateToFile: file not found in data — ${filePath}`);
+      return false;
     }
+
+    this._setStoreState({
+      currentModule: targetMod,
+      currentSubdir: null,
+      currentLevel: 'symbols',
+      currentFile: targetFile,
+    });
+    this._buildSymbolGraph(targetFile);
+    return true;
+  }
+
+  /** Navigate to a module group's drill-down view by group name. */
+  navigateToGroup(groupName) {
+    const allModules = this._getAllModules();
+    const groups = this._groupModules(allModules);
+    const group = groups.get(groupName);
+    if (!group || group.modules.length === 0) return;
+    // Ensure we're at modules level
+    this._setStoreState({
+      currentLevel: 'modules',
+      currentModule: null,
+      currentSubdir: null,
+      currentFile: null,
+    });
+    this._activeGroup = group;
+    this._setStoreSingle('activeGroup', group);
+    this._renderGroupDrillDown();
+  }
+
+  /** Go back from group drill-down to grouped overview. Returns true if handled. */
+  goBack() {
+    if (this._activeGroup) {
+      this._renderModuleView(); // clears _activeGroup and re-renders grouped view
+      return true;
+    }
+    return false;
   }
 
   /** Get the Cytoscape code instance (for search highlighting, etc.) */

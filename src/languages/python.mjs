@@ -427,17 +427,22 @@ function resolveImport(importPath, fromFile, projectRoot, fileIndex) {
   }
 
   // Absolute imports — check if it maps to a local file/package
+  // Try direct path first, then under common source root directories (src/, lib/, app/, source/)
   const parts = importPath.split(".");
-  const localPath = resolve(projectRoot, parts.join("/"));
-  const rel = relative(projectRoot, localPath);
-  if (!rel.startsWith("..")) {
+  const joined = parts.join("/");
+  const SOURCE_ROOTS = ["", "src/", "lib/", "app/", "source/"];
+
+  for (const prefix of SOURCE_ROOTS) {
+    const localPath = resolve(projectRoot, prefix + joined);
+    const rel = relative(projectRoot, localPath);
+    if (rel.startsWith("..")) continue;
     if (fileIndex) {
       const exact = fileIndex.resolve(rel);
       if (exact) return { resolvedPath: exact, resolvedModule: getModuleFromRelPath(exact) };
     }
-    return { resolvedPath: rel, resolvedModule: getModuleFromRelPath(rel) };
   }
 
+  // No match in file index — treat as external
   return { resolvedPath: null, resolvedModule: "external" };
 }
 

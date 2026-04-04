@@ -13,9 +13,11 @@ class Store extends EventTarget {
       sidebarTab: 'explorer',
       chatOpen: false,
       sidebarCollapsed: false,
+      activeGroup: null,     // { name, modules: [...] } when viewing a module group
       activeTour: null,
       activeTourStep: 0,
       activeIdeaNode: null,
+      selectedSymbol: null,
     };
   }
 
@@ -24,7 +26,11 @@ class Store extends EventTarget {
   }
 
   set(key, value) {
-    if (this._state[key] === value) return;
+    const old = this._state[key];
+    if (old === value) return;
+    // For objects with a path property (e.g. currentFile), compare by path
+    if (old && value && typeof old === 'object' && typeof value === 'object'
+        && old.path && old.path === value.path) return;
     this._state[key] = value;
     this.dispatchEvent(new CustomEvent('state-changed', {
       detail: { key, value },
