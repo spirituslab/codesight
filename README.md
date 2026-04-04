@@ -1,6 +1,10 @@
 # Codesight
 
-Universal code structure visualization via static analysis. Codesight parses your codebase, builds dependency graphs and call chains, and renders them as interactive explorable maps.
+Universal code structure visualization via static analysis, built on two layers:
+
+- **Code Layer** — Pure static analysis. Codesight parses your codebase with tree-sitter, extracts symbols, resolves imports, builds call graphs, and renders everything as an interactive explorable map with 4 levels of drill-down (modules, folders, files, symbols). No LLM required — fast, deterministic, and works offline.
+
+- **Idea Layer** — AI-powered conceptual overlay. Using whatever LLM you already have (Copilot, Claude Code, or any VS Code LLM extension), Codesight generates a conceptual map of *what* your project does — features, responsibilities, and architectural patterns — linked to the actual code that implements them.
 
 Supports **TypeScript, JavaScript, Python, C, C++, and Java**.
 
