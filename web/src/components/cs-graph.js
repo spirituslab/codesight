@@ -1462,14 +1462,30 @@ export class CsGraph extends LitElement {
 
     const containerRect = sceneWrapper.getBoundingClientRect();
 
+    const activeId = store.state.activeIdeaNode;
+    const hasSelection = !!activeId;
+
     for (const node of idea.nodes) {
       if (!node.codeRefs || node.codeRefs.length === 0) continue;
 
       const fromPos = this._getScreenPos(this._cyIdea, node.id, ideaEl, containerRect);
       if (!fromPos) continue;
 
-      const isActive = store.state.activeIdeaNode === node.id;
+      const isActive = activeId === node.id;
       const color = getColor(node.id);
+
+      // Default: all lines visible. On selection: highlight active, dim others.
+      let opacity, lineWidth;
+      if (!hasSelection) {
+        opacity = 0.35;
+        lineWidth = 1;
+      } else if (isActive) {
+        opacity = 0.7;
+        lineWidth = 2.5;
+      } else {
+        opacity = 0.06;
+        lineWidth = 0.5;
+      }
 
       for (const ref of node.codeRefs) {
         const targetId = this._resolveCodeRefToNodeId(ref);
@@ -1480,8 +1496,8 @@ export class CsGraph extends LitElement {
 
         ctx.beginPath();
         ctx.setLineDash([4, 8]);
-        ctx.strokeStyle = fadeColor(color, isActive ? 0.55 : 0.1);
-        ctx.lineWidth = isActive ? 2 : 0.8;
+        ctx.strokeStyle = fadeColor(color, opacity);
+        ctx.lineWidth = lineWidth;
 
         const midX = (fromPos.x + toPos.x) / 2;
         const midY = (fromPos.y + toPos.y) / 2;
@@ -1491,8 +1507,8 @@ export class CsGraph extends LitElement {
 
         if (isActive) {
           ctx.beginPath();
-          ctx.arc(toPos.x, toPos.y, 3, 0, Math.PI * 2);
-          ctx.fillStyle = fadeColor(color, 0.6);
+          ctx.arc(toPos.x, toPos.y, 4, 0, Math.PI * 2);
+          ctx.fillStyle = fadeColor(color, 0.7);
           ctx.fill();
         }
       }
