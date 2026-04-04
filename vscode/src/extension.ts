@@ -177,6 +177,39 @@ export function deactivate() {
   analyzer = null;
 }
 
+function pickBestChatModel(models: vscode.LanguageModelChat[]): vscode.LanguageModelChat {
+  const tierPatterns: Array<{ pattern: RegExp; score: number }> = [
+    { pattern: /claude.*opus|opus/i, score: 100 },
+    { pattern: /gpt-?5(?!.*mini)/i, score: 95 },
+    { pattern: /claude.*sonnet|sonnet/i, score: 90 },
+    { pattern: /gpt-?4\.?1(?!.*mini|.*nano)/i, score: 85 },
+    { pattern: /gpt-?4o(?!.*mini)/i, score: 80 },
+    { pattern: /claude.*haiku|haiku/i, score: 60 },
+    { pattern: /gpt-?5.*mini/i, score: 55 },
+    { pattern: /gpt-?4o.*mini/i, score: 50 },
+    { pattern: /gpt-?4\.?1.*mini/i, score: 48 },
+    { pattern: /gpt-?4\.?1.*nano/i, score: 40 },
+    { pattern: /raptor/i, score: 30 },
+    { pattern: /preview/i, score: -5 },
+  ];
+
+  function scoreModel(m: vscode.LanguageModelChat): number {
+    const text = `${m.name} ${m.id} ${(m as any).family || ''} ${(m as any).vendor || ''}`;
+    let score = 0;
+    for (const { pattern, score: s } of tierPatterns) {
+      if (pattern.test(text)) score += s;
+    }
+    if (m.maxInputTokens) {
+      score += Math.min(10, Math.floor(m.maxInputTokens / 20000));
+    }
+    return score;
+  }
+
+  const scored = models.map(m => ({ model: m, score: scoreModel(m) }));
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0].model;
+}
+
 async function handleChatRequest(
   msg: any,
   analyzerInstance: AnalyzerWrapper | null,
@@ -231,7 +264,8 @@ async function handleChatRequest(
   try {
     const models = await vscode.lm.selectChatModels();
     if (models && models.length > 0) {
-      const model = models[0];
+      const model = pickBestChatModel(models);
+      const modelLabel = `${model.name}${(model as any).vendor ? ' (' + (model as any).vendor + ')' : ''}`;
       const prompt = `You are a code structure expert. Use this context to answer the user's question.\n\n${contextText}\n\nUser: ${message}`;
       const messages = [vscode.LanguageModelChatMessage.User(prompt)];
       const response = await model.sendRequest(messages, {});
@@ -239,7 +273,7 @@ async function handleChatRequest(
       for await (const fragment of response.text) {
         fullText += fragment;
       }
-      webview.postMessage({ type: 'chatResponse', text: fullText, originalMessage: message });
+      webview.postMessage({ type: 'chatResponse', text: fullText, model: modelLabel, originalMessage: message });
       return;
     }
   } catch (_) {
@@ -285,7 +319,7 @@ async function handleChatRequest(
         const data = JSON.parse(raw);
         if (data.timestamp && data.timestamp > requestTimestamp - 1000) {
           cleanup();
-          webview.postMessage({ type: 'chatResponse', text: data.text, originalMessage: message });
+          webview.postMessage({ type: 'chatResponse', text: data.text, model: 'Claude Code (MCP)', originalMessage: message });
           try { fs.unlinkSync(responseFile); } catch (_) {}
         }
       } catch (_) {}

@@ -49,9 +49,9 @@ export async function generateIdeaLayer(
       );
       return;
     }
-    log.appendLine(`[idea-layer] Found ${allModels.length} models: ${allModels.map((m: any) => m.name).join(', ')}`);
-    model = allModels[0];
-    log.appendLine(`[idea-layer] Using model: ${model.name} (${(model as any).vendor})`);
+    log.appendLine(`[idea-layer] Found ${allModels.length} models: ${allModels.map((m: any) => `${m.name} (${m.vendor || '?'})`).join(', ')}`);
+    model = pickBestModel(allModels);
+    log.appendLine(`[idea-layer] Using model: ${model.name} (${(model as any).vendor || '?'}, family: ${(model as any).family || '?'})`);
   } catch (err: any) {
     log.appendLine(`[idea-layer] LM API error: ${err.message}\n${err.stack || ''}`);
     vscode.window.showErrorMessage(`Codesight: LM API error: ${err.message}`);
@@ -118,6 +118,49 @@ export async function generateIdeaLayer(
       }
     }
   );
+}
+
+/**
+ * Pick the best model from available models.
+ * Prefers larger / more capable models for idea layer generation.
+ * Ranking is based on known model families and token limits.
+ */
+function pickBestModel(models: vscode.LanguageModelChat[]): vscode.LanguageModelChat {
+  // Tier keywords in model id/name/family — higher index = better
+  const tierPatterns: Array<{ pattern: RegExp; score: number }> = [
+    // Top tier — large frontier models
+    { pattern: /claude.*opus|opus/i, score: 100 },
+    { pattern: /gpt-?5(?!.*mini)/i, score: 95 },
+    { pattern: /claude.*sonnet|sonnet/i, score: 90 },
+    { pattern: /gpt-?4\.?1(?!.*mini|.*nano)/i, score: 85 },
+    { pattern: /gpt-?4o(?!.*mini)/i, score: 80 },
+    { pattern: /claude.*haiku|haiku/i, score: 60 },
+    // Mid tier — smaller / mini models
+    { pattern: /gpt-?5.*mini/i, score: 55 },
+    { pattern: /gpt-?4o.*mini/i, score: 50 },
+    { pattern: /gpt-?4\.?1.*mini/i, score: 48 },
+    { pattern: /gpt-?4\.?1.*nano/i, score: 40 },
+    // Low tier — preview / unknown
+    { pattern: /raptor/i, score: 30 },
+    { pattern: /preview/i, score: -5 },  // penalty
+  ];
+
+  function scoreModel(m: vscode.LanguageModelChat): number {
+    const text = `${m.name} ${m.id} ${(m as any).family || ''} ${(m as any).vendor || ''}`;
+    let score = 0;
+    for (const { pattern, score: s } of tierPatterns) {
+      if (pattern.test(text)) score += s;
+    }
+    // Bonus for higher token limits (proxy for capability)
+    if (m.maxInputTokens) {
+      score += Math.min(10, Math.floor(m.maxInputTokens / 20000));
+    }
+    return score;
+  }
+
+  const scored = models.map(m => ({ model: m, score: scoreModel(m) }));
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0].model;
 }
 
 /**

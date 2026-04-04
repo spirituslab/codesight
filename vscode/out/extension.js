@@ -4770,9 +4770,9 @@ async function generateIdeaLayer(analyzer2, webviewManager2) {
       );
       return;
     }
-    log.appendLine(`[idea-layer] Found ${allModels.length} models: ${allModels.map((m) => m.name).join(", ")}`);
-    model = allModels[0];
-    log.appendLine(`[idea-layer] Using model: ${model.name} (${model.vendor})`);
+    log.appendLine(`[idea-layer] Found ${allModels.length} models: ${allModels.map((m) => `${m.name} (${m.vendor || "?"})`).join(", ")}`);
+    model = pickBestModel(allModels);
+    log.appendLine(`[idea-layer] Using model: ${model.name} (${model.vendor || "?"}, family: ${model.family || "?"})`);
   } catch (err) {
     log.appendLine(`[idea-layer] LM API error: ${err.message}
 ${err.stack || ""}`);
@@ -4826,6 +4826,40 @@ ${err?.stack || ""}`);
       }
     }
   );
+}
+function pickBestModel(models) {
+  const tierPatterns = [
+    // Top tier — large frontier models
+    { pattern: /claude.*opus|opus/i, score: 100 },
+    { pattern: /gpt-?5(?!.*mini)/i, score: 95 },
+    { pattern: /claude.*sonnet|sonnet/i, score: 90 },
+    { pattern: /gpt-?4\.?1(?!.*mini|.*nano)/i, score: 85 },
+    { pattern: /gpt-?4o(?!.*mini)/i, score: 80 },
+    { pattern: /claude.*haiku|haiku/i, score: 60 },
+    // Mid tier — smaller / mini models
+    { pattern: /gpt-?5.*mini/i, score: 55 },
+    { pattern: /gpt-?4o.*mini/i, score: 50 },
+    { pattern: /gpt-?4\.?1.*mini/i, score: 48 },
+    { pattern: /gpt-?4\.?1.*nano/i, score: 40 },
+    // Low tier — preview / unknown
+    { pattern: /raptor/i, score: 30 },
+    { pattern: /preview/i, score: -5 }
+    // penalty
+  ];
+  function scoreModel(m) {
+    const text = `${m.name} ${m.id} ${m.family || ""} ${m.vendor || ""}`;
+    let score = 0;
+    for (const { pattern, score: s } of tierPatterns) {
+      if (pattern.test(text)) score += s;
+    }
+    if (m.maxInputTokens) {
+      score += Math.min(10, Math.floor(m.maxInputTokens / 2e4));
+    }
+    return score;
+  }
+  const scored = models.map((m) => ({ model: m, score: scoreModel(m) }));
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0].model;
 }
 function buildIdeaStructurePrompt2(result) {
   const { projectName, modules, edges, keyFiles, languages: languages2 } = result;
@@ -5097,6 +5131,36 @@ function deactivate() {
   activeTimers.length = 0;
   analyzer = null;
 }
+function pickBestChatModel(models) {
+  const tierPatterns = [
+    { pattern: /claude.*opus|opus/i, score: 100 },
+    { pattern: /gpt-?5(?!.*mini)/i, score: 95 },
+    { pattern: /claude.*sonnet|sonnet/i, score: 90 },
+    { pattern: /gpt-?4\.?1(?!.*mini|.*nano)/i, score: 85 },
+    { pattern: /gpt-?4o(?!.*mini)/i, score: 80 },
+    { pattern: /claude.*haiku|haiku/i, score: 60 },
+    { pattern: /gpt-?5.*mini/i, score: 55 },
+    { pattern: /gpt-?4o.*mini/i, score: 50 },
+    { pattern: /gpt-?4\.?1.*mini/i, score: 48 },
+    { pattern: /gpt-?4\.?1.*nano/i, score: 40 },
+    { pattern: /raptor/i, score: 30 },
+    { pattern: /preview/i, score: -5 }
+  ];
+  function scoreModel(m) {
+    const text = `${m.name} ${m.id} ${m.family || ""} ${m.vendor || ""}`;
+    let score = 0;
+    for (const { pattern, score: s } of tierPatterns) {
+      if (pattern.test(text)) score += s;
+    }
+    if (m.maxInputTokens) {
+      score += Math.min(10, Math.floor(m.maxInputTokens / 2e4));
+    }
+    return score;
+  }
+  const scored = models.map((m) => ({ model: m, score: scoreModel(m) }));
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0].model;
+}
 async function handleChatRequest(msg, analyzerInstance, webview) {
   const { message, context, history } = msg;
   const result = analyzerInstance?.getResult();
@@ -5156,7 +5220,8 @@ ${fn.data.source.slice(0, 1500)}
   try {
     const models = await vscode6.lm.selectChatModels();
     if (models && models.length > 0) {
-      const model = models[0];
+      const model = pickBestChatModel(models);
+      const modelLabel = `${model.name}${model.vendor ? " (" + model.vendor + ")" : ""}`;
       const prompt = `You are a code structure expert. Use this context to answer the user's question.
 
 ${contextText}
@@ -5168,7 +5233,7 @@ User: ${message}`;
       for await (const fragment of response.text) {
         fullText += fragment;
       }
-      webview.postMessage({ type: "chatResponse", text: fullText, originalMessage: message });
+      webview.postMessage({ type: "chatResponse", text: fullText, model: modelLabel, originalMessage: message });
       return;
     }
   } catch (_) {
@@ -5207,7 +5272,7 @@ User: ${message}`;
         const data = JSON.parse(raw);
         if (data.timestamp && data.timestamp > requestTimestamp - 1e3) {
           cleanup();
-          webview.postMessage({ type: "chatResponse", text: data.text, originalMessage: message });
+          webview.postMessage({ type: "chatResponse", text: data.text, model: "Claude Code (MCP)", originalMessage: message });
           try {
             fs2.unlinkSync(responseFile);
           } catch (_) {

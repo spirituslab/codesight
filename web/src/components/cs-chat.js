@@ -57,12 +57,19 @@ export class CsChat extends LitElement {
     .messages::-webkit-scrollbar-thumb { background: var(--ctp-surface1); border-radius: 2px; }
     .msg { margin-bottom: 12px; font-size: var(--font-size-base); line-height: 1.6; }
     .msg.user { color: var(--text-primary); }
-    .msg.user::before { content: "You: "; font-weight: 600; color: var(--accent); }
     .msg.assistant { color: var(--text-secondary); white-space: pre-wrap; }
-    .msg.assistant::before { content: "AI: "; font-weight: 600; color: var(--ctp-green); }
     .msg.error { color: var(--ctp-red); font-size: var(--font-size-sm); }
+    .model-tag {
+      display: inline-block;
+      font-size: 10px;
+      color: var(--ctp-overlay0, #6c7086);
+      background: var(--ctp-surface0, #313244);
+      padding: 1px 6px;
+      border-radius: 3px;
+      margin-bottom: 4px;
+      font-weight: 500;
+    }
     .msg.pending { color: var(--text-muted); font-style: italic; }
-    .msg.pending::before { content: ""; }
     .input-area {
       display: flex; gap: 8px; padding: 12px 14px;
       border-top: 1px solid var(--border);
@@ -238,7 +245,7 @@ export class CsChat extends LitElement {
     if (msg.error) {
       this._messages = [...this._messages, { role: 'error', text: msg.error }];
     } else {
-      this._messages = [...this._messages, { role: 'assistant', text: msg.text }];
+      this._messages = [...this._messages, { role: 'assistant', text: msg.text, model: msg.model || null }];
       this._history.push({ role: 'user', content: msg.originalMessage || '' });
       this._history.push({ role: 'assistant', content: msg.text });
     }
@@ -343,7 +350,14 @@ export class CsChat extends LitElement {
         </div>
       ` : ''}
       <div class="messages">
-        ${this._messages.map(m => html`<div class="msg ${m.role}">${m.text}</div>`)}
+        ${this._messages.map(m => html`
+          <div class="msg ${m.role}">
+            ${m.role === 'user' ? html`<strong style="color:var(--accent)">You: </strong>` : ''}
+            ${m.role === 'assistant' && m.model ? html`<span class="model-tag">${m.model}</span><br>` : ''}
+            ${m.role === 'assistant' && !m.model ? html`<strong style="color:var(--ctp-green)">AI: </strong>` : ''}
+            ${m.text}
+          </div>
+        `)}
       </div>
       <div class="input-area">
         <textarea placeholder="${this._ideaNode
