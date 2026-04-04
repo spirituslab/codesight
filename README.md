@@ -269,4 +269,4 @@ cd vscode && npm run watch
 
 ## License
 
-MIT
+This project is licensed under the [MIT License](LICENSE).
