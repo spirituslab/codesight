@@ -84,8 +84,12 @@ export function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand('codesight.generateIdeaLayer', async () => {
+      vscode.window.showInformationMessage('Codesight: Starting idea layer generation...');
       const a = ensureAnalyzer();
-      if (!a) return;
+      if (!a) {
+        vscode.window.showErrorMessage('Codesight: No analyzer available.');
+        return;
+      }
 
       if (!a.getResult()) {
         vscode.window.showWarningMessage('Codesight: Run "Open Graph" first to analyze the project.');

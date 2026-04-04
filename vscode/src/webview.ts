@@ -24,7 +24,7 @@ export class WebviewManager {
         enableScripts: true,
         retainContextWhenHidden: true,
         localResourceRoots: [
-          vscode.Uri.joinPath(this.extensionUri, '..', 'web'),
+          vscode.Uri.joinPath(this.extensionUri, 'web'),
           vscode.Uri.joinPath(this.extensionUri, 'media'),
         ],
       }
@@ -55,7 +55,7 @@ export class WebviewManager {
   }
 
   private getWebviewContent(webview: vscode.Webview): string {
-    const webDir = vscode.Uri.joinPath(this.extensionUri, '..', 'web');
+    const webDir = vscode.Uri.joinPath(this.extensionUri, 'web');
 
     // For the web UI source files
     const webSrcUri = webview.asWebviewUri(vscode.Uri.joinPath(webDir, 'src'));

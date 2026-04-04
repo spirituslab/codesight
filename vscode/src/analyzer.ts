@@ -1,4 +1,6 @@
 import * as path from 'path';
+// @ts-ignore — ESM analyzer module bundled by esbuild
+import { analyze } from '../../src/analyzer/index.mjs';
 
 // Analysis result type (matches the output shape of analyze())
 export interface AnalysisResult {
@@ -18,26 +20,15 @@ export interface AnalysisResult {
 export class AnalyzerWrapper {
   private workspaceRoot: string;
   private result: AnalysisResult | null = null;
-  private analyzeModule: any = null;
 
   constructor(workspaceRoot: string) {
     this.workspaceRoot = workspaceRoot;
   }
 
-  private async loadAnalyzer(): Promise<any> {
-    if (this.analyzeModule) return this.analyzeModule;
-    // Dynamic import for ESM analyzer module
-    const analyzerPath = path.resolve(__dirname, '../../src/analyzer/index.mjs');
-    this.analyzeModule = await import(analyzerPath);
-    return this.analyzeModule;
-  }
-
   async runFullAnalysis(): Promise<AnalysisResult | null> {
     try {
-      console.log('[codesight] Loading analyzer from:', path.resolve(__dirname, '../../src/analyzer/index.mjs'));
-      const mod = await this.loadAnalyzer();
       console.log('[codesight] Running analysis on:', this.workspaceRoot);
-      this.result = await mod.analyze(this.workspaceRoot, { llm: false, cache: true });
+      this.result = await analyze(this.workspaceRoot, { llm: false, cache: true });
       console.log('[codesight] Analysis complete. Modules:', this.result?.modules?.length);
       return this.result;
     } catch (err: any) {

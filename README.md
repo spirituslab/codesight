@@ -45,11 +45,14 @@ npm run build
 
 ```bash
 cd vscode
-npx vsce package
+npm run build
+npx @vscode/vsce package
 code --install-extension codesight-0.1.0.vsix
 ```
 
 Then open any project and run `Ctrl+Shift+P` → **"Codesight: Open Graph"**.
+
+> **Note:** Do not use `--no-dependencies` when packaging. The extension requires tree-sitter native modules (`node_modules/`) to be bundled in the `.vsix`. The build step also copies the web UI (`web/src/`) into the extension directory so the webview can load its components at runtime.
 
 ### Commands
 
@@ -98,6 +101,8 @@ The idea layer is a conceptual overlay on the code graph — it shows **what** t
 
 - **With Copilot/LLM extension:** `Ctrl+Shift+P` → **"Codesight: Generate Idea Layer"**
 - **With Claude Code:** In the terminal, ask: *"use codesight to generate the idea layer for this project"*
+
+> **Note:** The "Generate Idea Layer" command requires the **GitHub Copilot** extension (`github.copilot`) — not just Copilot Chat — installed and signed in. This is the extension that provides the `vscode.lm` language model API. Copilot Chat alone (`github.copilot-chat`) or Claude Code (`anthropic.claude-code`) do not register language models for this API.
 
 Once generated, clicking an idea node highlights the related code in the main graph and opens the chat panel with that concept as context.
 

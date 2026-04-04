@@ -3,6 +3,12 @@ import * as path from 'path';
 import { AnalyzerWrapper } from './analyzer';
 import { WebviewManager } from './webview';
 
+let output: vscode.OutputChannel;
+function getOutput() {
+  if (!output) output = vscode.window.createOutputChannel('Codesight');
+  return output;
+}
+
 /**
  * Generate the idea layer using whatever LLM the user has installed in VS Code.
  * Reuses the same prompt logic as codesight's --llm mode, but routes through
@@ -12,6 +18,10 @@ export async function generateIdeaLayer(
   analyzer: AnalyzerWrapper,
   webviewManager: WebviewManager
 ): Promise<void> {
+  const log = getOutput();
+  log.show(true);
+  log.appendLine('[idea-layer] Starting idea layer generation...');
+
   const result = analyzer.getResult();
   if (!result) {
     vscode.window.showWarningMessage('Codesight: Run analysis first (Open Graph).');
@@ -21,22 +31,30 @@ export async function generateIdeaLayer(
   // Find an available language model
   let model: vscode.LanguageModelChat;
   try {
-    // Log all available models for debugging
-    const allModels = await vscode.lm.selectChatModels();
-    console.log(`[codesight] Available models (${allModels?.length || 0}):`,
-      allModels?.map((m: any) => `${m.name} (${m.vendor}, ${m.family}, ${m.id})`));
-
-    if (!allModels || allModels.length === 0) {
+    if (!vscode.lm) {
       vscode.window.showErrorMessage(
-        'Codesight: No language model available. Make sure your LLM extension (Copilot, Claude, etc.) is active in this window.'
+        'Codesight: Language Model API not available. Requires VS Code 1.90+ with a language model extension (Copilot, Claude, etc.).'
       );
       return;
     }
+    log.appendLine('[idea-layer] Querying available models...');
+    const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000));
+    const allModels = await Promise.race([vscode.lm.selectChatModels(), timeout]);
+
+    if (!allModels || allModels.length === 0) {
+      log.appendLine('[idea-layer] No models found (timed out or none registered)');
+      log.show();
+      vscode.window.showErrorMessage(
+        'Codesight: No language model found. Install and sign into GitHub Copilot (github.copilot) — it provides the vscode.lm API. Copilot Chat alone is not sufficient.'
+      );
+      return;
+    }
+    log.appendLine(`[idea-layer] Found ${allModels.length} models: ${allModels.map((m: any) => m.name).join(', ')}`);
     model = allModels[0];
-    console.log(`[codesight] Using model: ${model.name} (${model.vendor})`);
+    log.appendLine(`[idea-layer] Using model: ${model.name} (${(model as any).vendor})`);
   } catch (err: any) {
-    console.error('[codesight] LM API error:', err);
-    vscode.window.showErrorMessage(`Codesight: Failed to access language model: ${err.message}`);
+    log.appendLine(`[idea-layer] LM API error: ${err.message}\n${err.stack || ''}`);
+    vscode.window.showErrorMessage(`Codesight: LM API error: ${err.message}`);
     return;
   }
 
@@ -53,6 +71,7 @@ export async function generateIdeaLayer(
           ),
         ];
 
+        log.appendLine('[idea-layer] Sending request to model...');
         const response = await model.sendRequest(messages, {}, token);
 
         // Collect the full response
@@ -60,31 +79,41 @@ export async function generateIdeaLayer(
         for await (const fragment of response.text) {
           fullText += fragment;
         }
+        log.appendLine(`[idea-layer] Response received (${fullText.length} chars)`);
 
         // Parse JSON from the response
         const parsed = parseJSON(fullText);
         if (!parsed || !parsed.nodes) {
-          vscode.window.showWarningMessage('Codesight: LLM returned an invalid idea structure. Try again.');
-          console.error('[codesight] Invalid idea structure response:', fullText.slice(0, 500));
+          log.appendLine('[idea-layer] Failed to parse response:\n' + fullText.slice(0, 1000));
+          log.show();
+          vscode.window.showErrorMessage('Codesight: LLM returned an invalid idea structure. Check Output panel (Codesight) for details.');
           return;
         }
 
         // Validate code references against actual analysis data
         const validated = validateIdeaStructure(parsed, result);
 
-        // Send to webview — merge with existing data
+        // Send to webview — spread into a new object so the store
+        // detects a change (store.set compares by reference).
         result.ideaStructure = validated;
-        webviewManager.postMessage({ type: 'updateData', data: result });
+        webviewManager.postMessage({ type: 'updateData', data: { ...result } });
 
         vscode.window.showInformationMessage('Codesight: Idea layer generated successfully.');
       } catch (err: any) {
+        log.appendLine(`[idea-layer] Error: ${err?.code} ${err?.message}\n${err?.stack || ''}`);
+        log.show();
         if (err.code === 'NoPermissions') {
-          vscode.window.showWarningMessage('Codesight: Please allow access to the language model when prompted.');
+          const action = await vscode.window.showWarningMessage(
+            'Codesight: Language model access was denied. Please allow access when prompted.',
+            'Try Again'
+          );
+          if (action === 'Try Again') {
+            vscode.commands.executeCommand('codesight.generateIdeaLayer');
+          }
         } else if (token.isCancellationRequested) {
           // User cancelled
         } else {
-          vscode.window.showErrorMessage(`Codesight: Idea layer generation failed: ${err.message}`);
-          console.error('[codesight] Idea layer error:', err);
+          vscode.window.showErrorMessage(`Codesight: Idea layer generation failed: ${err.message}. Check Output panel (Codesight).`);
         }
       }
     }
