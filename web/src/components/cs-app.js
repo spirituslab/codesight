@@ -116,6 +116,11 @@ export class CsApp extends LitElement {
       this._messageHandler = (event) => {
         const msg = event.data;
         if (msg.type === 'updateData') {
+          // Preserve existing idea structure if the new data doesn't include one
+          const oldData = store.state.DATA;
+          if (oldData?.ideaStructure && !msg.data.ideaStructure) {
+            msg.data.ideaStructure = oldData.ideaStructure;
+          }
           store.set('DATA', msg.data);
         } else if (msg.type === 'highlightNode') {
           this._graph?.highlightNode?.(msg.nodeId);

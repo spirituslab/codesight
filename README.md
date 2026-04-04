@@ -76,8 +76,9 @@ The graph has **4 levels of drill-down**:
 - **Click** a node to drill down into it
 - **Click** a symbol node to open that file at the symbol's line in VS Code
 - **Right-click** any node to open the chat panel with that node as context
+- **← back button** in the breadcrumb bar to navigate up one level
+- **Breadcrumbs** at the top show your current path — click any segment to jump back
 - **Ctrl+/** to toggle the chat panel
-- **Breadcrumbs** at the top show your current path — click to go back
 
 ### Chat Panel
 
@@ -104,7 +105,10 @@ The idea layer is a conceptual overlay on the code graph — it shows **what** t
 
 > **Note:** The "Generate Idea Layer" command requires the **GitHub Copilot** extension (`github.copilot`) — not just Copilot Chat — installed and signed in. This is the extension that provides the `vscode.lm` language model API. Copilot Chat alone (`github.copilot-chat`) or Claude Code (`anthropic.claude-code`) do not register language models for this API.
 
-Once generated, clicking an idea node highlights the related code in the main graph and opens the chat panel with that concept as context.
+Once generated:
+- **Left-click** an idea node to highlight its mapping lines to the code layer
+- **Right-click** an idea node to open the chat panel with that concept as context
+- The idea layer **persists across code refreshes** — stale mappings silently fade out, valid ones remain
 
 ### Auto-Refresh
 

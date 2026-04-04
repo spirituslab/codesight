@@ -178,6 +178,7 @@ export class CsGraph extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     store.removeEventListener('state-changed', this._boundStoreHandler);
+    if (this._resizeObserver) this._resizeObserver.disconnect();
     if (this._cyCode) this._cyCode.destroy();
     if (this._cyIdea) this._cyIdea.destroy();
   }
@@ -197,8 +198,8 @@ export class CsGraph extends LitElement {
           <canvas id="minimap" width="140" height="90"></canvas>
           <div id="legend"></div>
         </div>
+        <canvas id="mapping-canvas"></canvas>
       </div>
-      <canvas id="mapping-canvas"></canvas>
       <div id="tooltip"></div>
       <div id="help-hint">Click node to drill in · Esc go back · / filter · Ctrl+K search</div>
     `;
@@ -206,6 +207,14 @@ export class CsGraph extends LitElement {
 
   firstUpdated() {
     this._initCytoscape();
+    // Redraw mapping lines when layout changes (e.g. chat panel open/close)
+    const sceneWrapper = this.renderRoot.querySelector('#scene-wrapper');
+    if (sceneWrapper) {
+      this._resizeObserver = new ResizeObserver(() => {
+        this._scheduleDrawMappingLines();
+      });
+      this._resizeObserver.observe(sceneWrapper);
+    }
     // If data is already loaded (standalone mode), render immediately
     if (store.state.DATA) {
       this._renderWithData();
@@ -214,14 +223,28 @@ export class CsGraph extends LitElement {
   }
 
   _renderWithData() {
-    this._hasIdeas = !!store.state.DATA?.ideaStructure;
-    if (this._hasIdeas) {
+    const newHasIdeas = !!store.state.DATA?.ideaStructure;
+
+    if (newHasIdeas) {
+      this._hasIdeas = true;
       this.updateComplete.then(() => {
         this._initIdeaLayer();
         this._renderIdeaLayer();
         this._renderModuleView();
       });
+    } else if (this._hasIdeas && this._cyIdea) {
+      // Code refreshed but idea structure wasn't regenerated.
+      // Keep existing idea layer visible — just refresh the code layer
+      // and redraw mapping lines (stale refs will silently not draw).
+      this._renderModuleView();
     } else {
+      // No idea layer at all — clean up if needed
+      this._hasIdeas = false;
+      if (this._cyIdea) {
+        this._cyIdea.destroy();
+        this._cyIdea = null;
+      }
+      this._clearMappingCanvas();
       this._renderModuleView();
     }
   }
@@ -600,13 +623,30 @@ export class CsGraph extends LitElement {
 
   _getFileInnerPath(filePath, moduleName) {
     let inner = filePath;
-    const srcPrefixes = ['src/', 'lib/', 'app/', 'source/', 'packages/'];
+    const srcPrefixes = [
+      // Common across languages
+      'src/', 'lib/', 'app/', 'source/', 'packages/',
+      // Java / Kotlin
+      'src/main/java/', 'src/main/kotlin/', 'src/main/resources/',
+      'src/test/java/', 'src/test/kotlin/', 'src/test/resources/',
+      'src/main/', 'src/test/',
+      // Go
+      'cmd/', 'internal/', 'pkg/',
+      // C / C++
+      'include/', 'sources/',
+    ];
+    // Strip top-level src prefix first
     for (const prefix of srcPrefixes) {
       if (inner.startsWith(prefix)) { inner = inner.substring(prefix.length); break; }
     }
+    // Strip module path
     const modulePath = moduleName === 'root' ? '' : moduleName;
     if (modulePath && inner.startsWith(modulePath + '/')) {
       inner = inner.substring(modulePath.length + 1);
+    }
+    // Strip src prefix again after module path (e.g. web/src/... → src/... → ...)
+    for (const prefix of srcPrefixes) {
+      if (inner.startsWith(prefix)) { inner = inner.substring(prefix.length); break; }
     }
     return inner;
   }
@@ -1160,6 +1200,12 @@ export class CsGraph extends LitElement {
     const container = this.renderRoot.querySelector('#cy-idea');
     if (!container) return;
 
+    // Destroy previous instance to avoid corrupting the shared container
+    if (this._cyIdea) {
+      this._cyIdea.destroy();
+      this._cyIdea = null;
+    }
+
     this._cyIdea = cytoscape({
       container,
       style: [
@@ -1208,19 +1254,37 @@ export class CsGraph extends LitElement {
       wheelSensitivity: 0.3,
     });
 
+    // Left-click: highlight idea-to-code mapping lines
     this._cyIdea.on('tap', 'node', (e) => {
       const nodeId = e.target.data('id');
       store.set('activeIdeaNode', nodeId);
-      this._showIdeaDetail(nodeId);
+      this._highlightIdeaNode(nodeId);
       this._drawMappingLines();
     });
 
+    // Left-click background: clear highlights
     this._cyIdea.on('tap', (e) => {
       if (e.target === this._cyIdea) {
         store.set('activeIdeaNode', null);
         this._cyIdea.elements().removeClass('dimmed').removeClass('highlighted');
         this._cyCode.elements().removeClass('dimmed').removeClass('highlighted');
         this._drawMappingLines();
+      }
+    });
+
+    // Right-click: open chat with idea context
+    this._cyIdea.on('cxttap', 'node', (e) => {
+      e.originalEvent?.preventDefault();
+      const nodeId = e.target.data('id');
+      store.set('activeIdeaNode', nodeId);
+      this._highlightIdeaNode(nodeId);
+      this._drawMappingLines();
+      // Open chat with idea context
+      const idea = store.state.DATA?.ideaStructure;
+      const node = idea?.nodes?.find(n => n.id === nodeId);
+      if (node) {
+        const chat = document.querySelector('cs-chat');
+        if (chat) chat.setIdeaContext(node);
       }
     });
 
@@ -1278,7 +1342,7 @@ export class CsGraph extends LitElement {
     this._cyIdea.fit(undefined, 15);
   }
 
-  _showIdeaDetail(nodeId) {
+  _highlightIdeaNode(nodeId) {
     const idea = store.state.DATA?.ideaStructure;
     if (!idea) return;
     const node = idea.nodes.find(n => n.id === nodeId);
@@ -1295,10 +1359,6 @@ export class CsGraph extends LitElement {
       detail: { nodeId, node, idea },
       bubbles: true, composed: true,
     }));
-
-    // Auto-open chat with idea context
-    const chat = document.querySelector('cs-chat');
-    if (chat) chat.setIdeaContext(node);
   }
 
   _highlightCodeRefs(codeRefs) {
@@ -1343,6 +1403,11 @@ export class CsGraph extends LitElement {
           if (info?.files && info.files.some(f => f.path === filePath)) return n.data('id');
         }
       }
+      // Module-level ref: if we're viewing inside that module, pick the first visible node
+      if (moduleName && moduleName === store.state.currentModule) {
+        const firstNode = this._cyCode.nodes().first();
+        if (firstNode.length) return firstNode.data('id');
+      }
       return null;
     }
     if (level === 'symbols') {
@@ -1351,12 +1416,25 @@ export class CsGraph extends LitElement {
         if (node.length) return `export:${ref.name}`;
       }
       if (filePath === store.state.currentFile?.path) return 'center';
+      // Module or file ref pointing to the module/file we're viewing symbols for
+      if (moduleName && moduleName === store.state.currentModule) return 'center';
+      if (filePath) {
+        const curFile = store.state.currentFile;
+        if (curFile && moduleForFile(filePath) === store.state.currentModule) return 'center';
+      }
       return null;
     }
     return null;
   }
 
   // ─── Mapping Lines ────────────────────────────────────────────────
+
+  _clearMappingCanvas() {
+    const canvas = this.renderRoot.querySelector('#mapping-canvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
 
   _scheduleDrawMappingLines() {
     if (this._mappingRAF) return;

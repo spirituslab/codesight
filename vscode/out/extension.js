@@ -4377,8 +4377,8 @@ var WebviewManager = class {
     connect-src https://esm.run https://cdn.jsdelivr.net;
   ">
   <title>Codesight Graph</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.4/cytoscape.min.js"></script>
-  <script type="importmap">
+  <script nonce="${nonce}" src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.4/cytoscape.min.js"></script>
+  <script nonce="${nonce}" type="importmap">
   {
     "imports": {
       "lit": "https://esm.run/lit@3.2.1",
