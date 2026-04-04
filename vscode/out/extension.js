@@ -4277,6 +4277,10 @@ var AnalyzerWrapper = class {
 
 // src/webview.ts
 var vscode = __toESM(require("vscode"));
+var crypto = __toESM(require("crypto"));
+function getNonce() {
+  return crypto.randomBytes(16).toString("base64");
+}
 var WebviewManager = class {
   constructor(extensionUri) {
     this.panel = null;
@@ -4321,6 +4325,7 @@ var WebviewManager = class {
   getWebviewContent(webview) {
     const webDir = vscode.Uri.joinPath(this.extensionUri, "web");
     const webSrcUri = webview.asWebviewUri(vscode.Uri.joinPath(webDir, "src"));
+    const nonce = getNonce();
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -4328,7 +4333,7 @@ var WebviewManager = class {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="
     default-src 'none';
-    script-src ${webview.cspSource} https://esm.run https://cdn.jsdelivr.net https://cdnjs.cloudflare.com 'unsafe-inline';
+    script-src ${webview.cspSource} https://esm.run https://cdn.jsdelivr.net https://cdnjs.cloudflare.com 'nonce-${nonce}';
     style-src ${webview.cspSource} 'unsafe-inline';
     img-src ${webview.cspSource} https: data:;
     font-src ${webview.cspSource};
@@ -4339,13 +4344,13 @@ var WebviewManager = class {
   <script type="importmap">
   {
     "imports": {
-      "lit": "https://esm.run/lit@3",
-      "lit/": "https://esm.run/lit@3/",
-      "@lit/reactive-element": "https://esm.run/@lit/reactive-element@2",
-      "@lit/reactive-element/": "https://esm.run/@lit/reactive-element@2/",
-      "lit-html": "https://esm.run/lit-html@3",
-      "lit-html/": "https://esm.run/lit-html@3/",
-      "lit-element/": "https://esm.run/lit-element@4/"
+      "lit": "https://esm.run/lit@3.2.1",
+      "lit/": "https://esm.run/lit@3.2.1/",
+      "@lit/reactive-element": "https://esm.run/@lit/reactive-element@2.1.0",
+      "@lit/reactive-element/": "https://esm.run/@lit/reactive-element@2.1.0/",
+      "lit-html": "https://esm.run/lit-html@3.2.1",
+      "lit-html/": "https://esm.run/lit-html@3.2.1/",
+      "lit-element/": "https://esm.run/lit-element@4.1.1/"
     }
   }
   </script>
@@ -4366,12 +4371,12 @@ var WebviewManager = class {
   </cs-app>
   <cs-global-search></cs-global-search>
   <cs-code-popup></cs-code-popup>
-  <script>
+  <script nonce="${nonce}">
     // Set flags SYNCHRONOUSLY before any modules load
     window.__CODESIGHT_VSCODE__ = acquireVsCodeApi();
     window.__CODESIGHT_WEBVIEW__ = true;
   </script>
-  <script type="module">
+  <script nonce="${nonce}" type="module">
     // Import all components
     import '${webSrcUri}/components/cs-app.js';
     import '${webSrcUri}/components/cs-graph.js';
@@ -4682,9 +4687,11 @@ function setupFileWatcher(context, analyzer2, webviewManager2) {
         console.error("[codesight] Failed to load idea structure:", err.message);
       }
     };
-    ideaWatcher.onDidCreate(loadIdeaStructure);
-    ideaWatcher.onDidChange(loadIdeaStructure);
-    context.subscriptions.push(ideaWatcher);
+    context.subscriptions.push(
+      ideaWatcher.onDidCreate(loadIdeaStructure),
+      ideaWatcher.onDidChange(loadIdeaStructure),
+      ideaWatcher
+    );
     loadIdeaStructure();
   }
 }
@@ -4905,6 +4912,7 @@ var fs2 = __toESM(require("fs"));
 var path4 = __toESM(require("path"));
 var analyzer = null;
 var webviewManager;
+var activeTimers = [];
 function getWorkspaceRoot() {
   return vscode6.workspace.workspaceFolders?.[0]?.uri.fsPath || null;
 }
@@ -4919,7 +4927,8 @@ function mergeIdeaStructure(result) {
         result.ideaStructure = ideaStructure;
       }
     }
-  } catch (_) {
+  } catch (err) {
+    console.warn("[codesight] Failed to merge idea structure:", err);
   }
 }
 function ensureAnalyzer() {
@@ -5019,12 +5028,30 @@ function activate(context) {
       if (vscode6.chat?.createChatParticipant) {
         registerChatParticipant(context, analyzer);
       }
-    } catch (_) {
+    } catch (err) {
+      console.warn("[codesight] Failed to register chat participant:", err);
     }
   }
+  context.subscriptions.push(
+    vscode6.workspace.onDidChangeWorkspaceFolders(() => {
+      const newRoot = getWorkspaceRoot();
+      if (newRoot) {
+        analyzer = new AnalyzerWrapper(newRoot);
+        setupFileWatcher(context, analyzer, webviewManager);
+      } else {
+        analyzer = null;
+      }
+    })
+  );
   console.log("[codesight] Extension activated successfully");
 }
 function deactivate() {
+  for (const timer of activeTimers) {
+    clearInterval(timer);
+    clearTimeout(timer);
+  }
+  activeTimers.length = 0;
+  analyzer = null;
 }
 async function handleChatRequest(msg, analyzerInstance, webview) {
   const { message, context, history } = msg;
@@ -5104,42 +5131,42 @@ User: ${message}`;
   }
   const root = getWorkspaceRoot();
   if (root) {
-    const fs3 = require("fs");
-    const path5 = require("path");
-    const outDir = path5.join(root, ".codesight");
-    fs3.mkdirSync(outDir, { recursive: true });
-    const requestFile = path5.join(outDir, "chat-request.json");
-    fs3.writeFileSync(requestFile, JSON.stringify({
+    const outDir = path4.join(root, ".codesight");
+    fs2.mkdirSync(outDir, { recursive: true });
+    const requestFile = path4.join(outDir, "chat-request.json");
+    fs2.writeFileSync(requestFile, JSON.stringify({
       message,
       context: contextText,
       history: history?.slice(-6),
       timestamp: Date.now()
     }, null, 2));
-    const responseFile = path5.join(outDir, "chat-response.json");
+    const responseFile = path4.join(outDir, "chat-response.json");
     const requestTimestamp = Date.now();
     try {
-      fs3.unlinkSync(responseFile);
+      fs2.unlinkSync(responseFile);
     } catch (_) {
     }
     const poll = setInterval(() => {
       try {
-        if (!fs3.existsSync(responseFile)) return;
-        const raw = fs3.readFileSync(responseFile, "utf-8");
+        if (!fs2.existsSync(responseFile)) return;
+        const raw = fs2.readFileSync(responseFile, "utf-8");
         const data = JSON.parse(raw);
         if (data.timestamp && data.timestamp > requestTimestamp - 1e3) {
           clearInterval(poll);
           webview.postMessage({ type: "chatResponse", text: data.text, originalMessage: message });
           try {
-            fs3.unlinkSync(responseFile);
+            fs2.unlinkSync(responseFile);
           } catch (_) {
           }
         }
       } catch (_) {
       }
     }, 1e3);
-    setTimeout(() => {
+    activeTimers.push(poll);
+    const timeout = setTimeout(() => {
       clearInterval(poll);
     }, 18e4);
+    activeTimers.push(timeout);
   } else {
     webview.postMessage({
       type: "chatResponse",

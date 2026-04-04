@@ -7,7 +7,7 @@ import { getLanguage } from "../languages/index.mjs";
 import { buildCrossReferences } from "./references.mjs";
 import { buildFileIndex } from "./file-index.mjs";
 import { refineModuleGrouping } from "./modules.mjs";
-import { loadCache, saveCache, hashContent, getCachedParse, setCachedParse, pruneCache } from "./cache.mjs";
+import { loadCache, saveCache, hashContent, getCachedParse, setCachedParse, pruneCache, checkTsconfigHash } from "./cache.mjs";
 
 const BATCH_SIZE = 30;
 
@@ -170,6 +170,7 @@ export async function analyze(projectRoot, options = {}) {
 
   // 4. Parse files in batches (with incremental caching)
   const cache = await loadCache(projectRoot);
+  await checkTsconfigHash(cache, projectRoot);
   const moduleMap = new Map();
   let cacheHits = 0;
 

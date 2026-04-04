@@ -411,7 +411,9 @@ function resolvePythonCallee(node, importLookup, localSymbols) {
 function resolveImport(importPath, fromFile, projectRoot, fileIndex) {
   // Python imports: dots = relative
   if (importPath.startsWith(".")) {
-    const dots = importPath.match(/^\.+/)[0].length;
+    const dotMatch = importPath.match(/^\.+/);
+    if (!dotMatch) return { resolvedPath: null, resolvedModule: "external" };
+    const dots = dotMatch[0].length;
     let base = dirname(fromFile);
     for (let i = 1; i < dots; i++) base = dirname(base);
     const modulePart = importPath.slice(dots).replace(/\./g, "/");

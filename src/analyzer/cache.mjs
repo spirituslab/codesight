@@ -23,6 +23,27 @@ export async function loadCache(projectRoot) {
 }
 
 /**
+ * Check if tsconfig has changed since last cache. If so, invalidate the cache.
+ */
+export async function checkTsconfigHash(cache, projectRoot) {
+  try {
+    const raw = await readFile(resolve(projectRoot, "tsconfig.json"), "utf-8");
+    const hash = hashContent(raw);
+    if (cache.tsconfigHash && cache.tsconfigHash !== hash) {
+      // tsconfig changed — invalidate all cached parses since import resolution may differ
+      cache.files = {};
+    }
+    cache.tsconfigHash = hash;
+  } catch {
+    // No tsconfig — clear stale hash if present
+    if (cache.tsconfigHash) {
+      cache.files = {};
+      delete cache.tsconfigHash;
+    }
+  }
+}
+
+/**
  * Save the cache to disk.
  */
 export async function saveCache(projectRoot, cache) {

@@ -82,10 +82,11 @@ export function setupFileWatcher(
       }
     };
 
-    ideaWatcher.onDidCreate(loadIdeaStructure);
-    ideaWatcher.onDidChange(loadIdeaStructure);
-
-    context.subscriptions.push(ideaWatcher);
+    context.subscriptions.push(
+      ideaWatcher.onDidCreate(loadIdeaStructure),
+      ideaWatcher.onDidChange(loadIdeaStructure),
+      ideaWatcher
+    );
 
     // Also load on startup if the file already exists
     loadIdeaStructure();

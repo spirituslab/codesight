@@ -1,4 +1,4 @@
-import { readdir, readFile } from "fs/promises";
+import { readdir, readFile, realpath } from "fs/promises";
 import { join, relative } from "path";
 
 const DEFAULT_IGNORE = new Set([
@@ -105,8 +105,19 @@ export async function walkDir(dir, extraIgnore = []) {
   const ignore = new Set([...DEFAULT_IGNORE, ...extraIgnore]);
   const gitignorePatterns = await loadGitignore(dir);
   const results = [];
+  const visitedDirs = new Set();
 
   async function recurse(current) {
+    // Resolve symlinks to detect cycles
+    let realDir;
+    try {
+      realDir = await realpath(current);
+    } catch {
+      return; // broken symlink or inaccessible
+    }
+    if (visitedDirs.has(realDir)) return;
+    visitedDirs.add(realDir);
+
     const entries = await readdir(current, { withFileTypes: true });
     const promises = [];
 

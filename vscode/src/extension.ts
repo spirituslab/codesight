@@ -10,6 +10,7 @@ import * as path from 'path';
 
 let analyzer: AnalyzerWrapper | null = null;
 let webviewManager: WebviewManager;
+const activeTimers: Array<ReturnType<typeof setInterval> | ReturnType<typeof setTimeout>> = [];
 
 function getWorkspaceRoot(): string | null {
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || null;
@@ -26,7 +27,9 @@ function mergeIdeaStructure(result: any) {
         result.ideaStructure = ideaStructure;
       }
     }
-  } catch (_) {}
+  } catch (err) {
+    console.warn('[codesight] Failed to merge idea structure:', err);
+  }
 }
 
 function ensureAnalyzer(): AnalyzerWrapper | null {
@@ -138,13 +141,35 @@ export function activate(context: vscode.ExtensionContext) {
       if (vscode.chat?.createChatParticipant) {
         registerChatParticipant(context, analyzer);
       }
-    } catch (_) {}
+    } catch (err) {
+      console.warn('[codesight] Failed to register chat participant:', err);
+    }
   }
+
+  // Re-initialize when workspace folders change
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      const newRoot = getWorkspaceRoot();
+      if (newRoot) {
+        analyzer = new AnalyzerWrapper(newRoot);
+        setupFileWatcher(context, analyzer, webviewManager);
+      } else {
+        analyzer = null;
+      }
+    })
+  );
 
   console.log('[codesight] Extension activated successfully');
 }
 
-export function deactivate() {}
+export function deactivate() {
+  for (const timer of activeTimers) {
+    clearInterval(timer);
+    clearTimeout(timer);
+  }
+  activeTimers.length = 0;
+  analyzer = null;
+}
 
 async function handleChatRequest(
   msg: any,
@@ -218,8 +243,6 @@ async function handleChatRequest(
   // Fall back: write chat request to .codesight/chat-request.json for MCP bridge
   const root = getWorkspaceRoot();
   if (root) {
-    const fs = require('fs');
-    const path = require('path');
     const outDir = path.join(root, '.codesight');
     fs.mkdirSync(outDir, { recursive: true });
     const requestFile = path.join(outDir, 'chat-request.json');
@@ -249,11 +272,13 @@ async function handleChatRequest(
         }
       } catch (_) {}
     }, 1000);
+    activeTimers.push(poll);
 
     // Timeout after 3 minutes
-    setTimeout(() => {
+    const timeout = setTimeout(() => {
       clearInterval(poll);
     }, 180000);
+    activeTimers.push(timeout);
   } else {
     webview.postMessage({
       type: 'chatResponse',

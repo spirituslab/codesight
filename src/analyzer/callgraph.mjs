@@ -176,8 +176,13 @@ export function buildCallGraph(modules, rootFiles, projectRoot, warnings = []) {
 
   // Build calledBy on symbols
   for (const edge of callGraphEdges) {
-    const [targetFile, targetName] = edge.target.split('::');
-    const [sourceFile, sourceName] = edge.source.split('::');
+    const targetSep = edge.target.indexOf('::');
+    const sourceSep = edge.source.indexOf('::');
+    if (targetSep === -1 || sourceSep === -1) continue;
+    const targetFile = edge.target.substring(0, targetSep);
+    const targetName = edge.target.substring(targetSep + 2);
+    const sourceFile = edge.source.substring(0, sourceSep);
+    const sourceName = edge.source.substring(sourceSep + 2);
 
     const file = findFileByPath(targetFile);
     if (file) {
@@ -196,7 +201,9 @@ export function buildCallGraph(modules, rootFiles, projectRoot, warnings = []) {
     for (const id of [edge.source, edge.target]) {
       if (!nodeSet.has(id)) {
         nodeSet.add(id);
-        const [filePath, symName] = id.split('::');
+        const sep = id.indexOf('::');
+        const filePath = sep !== -1 ? id.substring(0, sep) : id;
+        const symName = sep !== -1 ? id.substring(sep + 2) : id;
         const file = findFileByPath(filePath);
         const sym = file?.symbols.find(s => s.name === symName);
         nodes.push({
@@ -214,7 +221,7 @@ export function buildCallGraph(modules, rootFiles, projectRoot, warnings = []) {
     edges: callGraphEdges,
     stats: {
       totalCalls: callGraphEdges.length,
-      filesWithCalls: new Set(callGraphEdges.map(e => e.source.split('::')[0])).size,
+      filesWithCalls: new Set(callGraphEdges.map(e => { const i = e.source.indexOf('::'); return i !== -1 ? e.source.substring(0, i) : e.source; })).size,
       uniqueCallers: new Set(callGraphEdges.map(e => e.source)).size,
       uniqueCallees: new Set(callGraphEdges.map(e => e.target)).size,
       exact: callGraphEdges.filter(e => e.confidence === 'exact').length,

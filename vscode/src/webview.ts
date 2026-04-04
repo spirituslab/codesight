@@ -1,5 +1,10 @@
 import * as vscode from 'vscode';
+import * as crypto from 'crypto';
 import * as path from 'path';
+
+function getNonce(): string {
+  return crypto.randomBytes(16).toString('base64');
+}
 
 export class WebviewManager {
   private panel: vscode.WebviewPanel | null = null;
@@ -59,8 +64,9 @@ export class WebviewManager {
 
     // For the web UI source files
     const webSrcUri = webview.asWebviewUri(vscode.Uri.joinPath(webDir, 'src'));
+    const nonce = getNonce();
 
-    // CSP: allow local webview resources, CDN scripts, and unsafe-inline for Lit styles
+    // CSP: allow local webview resources, CDN scripts, and nonce-based inline scripts
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -68,7 +74,7 @@ export class WebviewManager {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="
     default-src 'none';
-    script-src ${webview.cspSource} https://esm.run https://cdn.jsdelivr.net https://cdnjs.cloudflare.com 'unsafe-inline';
+    script-src ${webview.cspSource} https://esm.run https://cdn.jsdelivr.net https://cdnjs.cloudflare.com 'nonce-${nonce}';
     style-src ${webview.cspSource} 'unsafe-inline';
     img-src ${webview.cspSource} https: data:;
     font-src ${webview.cspSource};
@@ -79,13 +85,13 @@ export class WebviewManager {
   <script type="importmap">
   {
     "imports": {
-      "lit": "https://esm.run/lit@3",
-      "lit/": "https://esm.run/lit@3/",
-      "@lit/reactive-element": "https://esm.run/@lit/reactive-element@2",
-      "@lit/reactive-element/": "https://esm.run/@lit/reactive-element@2/",
-      "lit-html": "https://esm.run/lit-html@3",
-      "lit-html/": "https://esm.run/lit-html@3/",
-      "lit-element/": "https://esm.run/lit-element@4/"
+      "lit": "https://esm.run/lit@3.2.1",
+      "lit/": "https://esm.run/lit@3.2.1/",
+      "@lit/reactive-element": "https://esm.run/@lit/reactive-element@2.1.0",
+      "@lit/reactive-element/": "https://esm.run/@lit/reactive-element@2.1.0/",
+      "lit-html": "https://esm.run/lit-html@3.2.1",
+      "lit-html/": "https://esm.run/lit-html@3.2.1/",
+      "lit-element/": "https://esm.run/lit-element@4.1.1/"
     }
   }
   </script>
@@ -106,12 +112,12 @@ export class WebviewManager {
   </cs-app>
   <cs-global-search></cs-global-search>
   <cs-code-popup></cs-code-popup>
-  <script>
+  <script nonce="${nonce}">
     // Set flags SYNCHRONOUSLY before any modules load
     window.__CODESIGHT_VSCODE__ = acquireVsCodeApi();
     window.__CODESIGHT_WEBVIEW__ = true;
   </script>
-  <script type="module">
+  <script nonce="${nonce}" type="module">
     // Import all components
     import '${webSrcUri}/components/cs-app.js';
     import '${webSrcUri}/components/cs-graph.js';
