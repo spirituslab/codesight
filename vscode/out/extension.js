@@ -767,6 +767,8 @@ function activate(context) {
       }
     } else if (msg.type === "requestRefresh") {
       vscode6.commands.executeCommand("codesight.refresh");
+    } else if (msg.type === "chatRequest") {
+      handleChatRequest(msg, analyzer, webviewManager);
     }
   });
   const root = getWorkspaceRoot();
@@ -783,6 +785,107 @@ function activate(context) {
   console.log("[codesight] Extension activated successfully");
 }
 function deactivate() {
+}
+async function handleChatRequest(msg, analyzerInstance, webview) {
+  const { message, context, history } = msg;
+  const result = analyzerInstance?.getResult();
+  let contextText = "";
+  if (context.ideaNode) {
+    contextText += `The user is asking about the concept "${context.ideaNode.label}": ${context.ideaNode.description}
+`;
+    if (context.ideaNode.codeRefs?.length) {
+      contextText += `Related code: ${context.ideaNode.codeRefs.map(
+        (r) => r.type === "module" ? `module:${r.name}` : r.path
+      ).join(", ")}
+`;
+    }
+  }
+  if (context.currentFile && result) {
+    for (const mod of result.modules || []) {
+      const file = mod.files?.find((f) => f.path === context.currentFile);
+      if (file) {
+        contextText += `Currently viewing: ${file.path} in module ${mod.name}
+`;
+        contextText += `Symbols: ${file.symbols?.map((s) => `${s.kind} ${s.name}`).join(", ")}
+`;
+        break;
+      }
+    }
+  }
+  if (result) {
+    contextText += `Project: ${result.projectName}, ${result.modules?.length} modules, ${result.languages?.join(", ")}
+`;
+  }
+  try {
+    const models = await vscode6.lm.selectChatModels();
+    if (models && models.length > 0) {
+      const model = models[0];
+      const prompt = `You are a code structure expert. Use this context to answer the user's question.
+
+${contextText}
+
+User: ${message}`;
+      const messages = [vscode6.LanguageModelChatMessage.User(prompt)];
+      const response = await model.sendRequest(messages, {});
+      let fullText = "";
+      for await (const fragment of response.text) {
+        fullText += fragment;
+      }
+      webview.postMessage({ type: "chatResponse", text: fullText, originalMessage: message });
+      return;
+    }
+  } catch (_) {
+  }
+  const root = getWorkspaceRoot();
+  if (root) {
+    const fs2 = require("fs");
+    const path4 = require("path");
+    const outDir = path4.join(root, ".codesight");
+    fs2.mkdirSync(outDir, { recursive: true });
+    const requestFile = path4.join(outDir, "chat-request.json");
+    fs2.writeFileSync(requestFile, JSON.stringify({
+      message,
+      context: contextText,
+      history: history?.slice(-6),
+      timestamp: Date.now()
+    }, null, 2));
+    const responseFile = path4.join(outDir, "chat-response.json");
+    try {
+      fs2.unlinkSync(responseFile);
+    } catch (_) {
+    }
+    const startTime = Date.now();
+    const poll = setInterval(() => {
+      try {
+        if (fs2.existsSync(responseFile)) {
+          const data = JSON.parse(fs2.readFileSync(responseFile, "utf-8"));
+          if (data.timestamp > startTime) {
+            clearInterval(poll);
+            webview.postMessage({ type: "chatResponse", text: data.text, originalMessage: message });
+            try {
+              fs2.unlinkSync(responseFile);
+            } catch (_) {
+            }
+          }
+        }
+      } catch (_) {
+      }
+      if (Date.now() - startTime > 6e4) {
+        clearInterval(poll);
+        webview.postMessage({
+          type: "chatResponse",
+          error: "No LLM available. Use Claude Code to answer: the question is saved in .codesight/chat-request.json",
+          originalMessage: message
+        });
+      }
+    }, 500);
+  } else {
+    webview.postMessage({
+      type: "chatResponse",
+      error: "No language model available and no workspace folder open.",
+      originalMessage: message
+    });
+  }
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {

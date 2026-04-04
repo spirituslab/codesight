@@ -1264,6 +1264,10 @@ export class CsGraph extends LitElement {
       detail: { nodeId, node, idea },
       bubbles: true, composed: true,
     }));
+
+    // Auto-open chat with idea context
+    const chat = document.querySelector('cs-chat');
+    if (chat) chat.setIdeaContext(node);
   }
 
   _highlightCodeRefs(codeRefs) {

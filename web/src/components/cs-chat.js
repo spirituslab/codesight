@@ -39,6 +39,17 @@ export class CsChat extends LitElement {
       text-transform: uppercase;
       letter-spacing: 0.5px;
     }
+    .idea-context {
+      padding: 8px 14px;
+      font-size: var(--font-size-sm);
+      color: var(--ctp-lavender);
+      background: rgba(137,180,250,0.08);
+      border-bottom: 1px solid var(--border);
+      line-height: 1.5;
+    }
+    .idea-context .label { font-weight: 600; color: var(--ctp-mauve); }
+    .idea-context .desc { color: var(--text-secondary); margin-top: 2px; }
+    .idea-context .refs { color: var(--text-muted); font-size: var(--font-size-xs); margin-top: 4px; }
     .messages {
       flex: 1; overflow-y: auto; padding: 12px 14px; min-height: 200px;
     }
@@ -47,9 +58,11 @@ export class CsChat extends LitElement {
     .msg { margin-bottom: 12px; font-size: var(--font-size-base); line-height: 1.6; }
     .msg.user { color: var(--text-primary); }
     .msg.user::before { content: "You: "; font-weight: 600; color: var(--accent); }
-    .msg.assistant { color: var(--text-secondary); }
+    .msg.assistant { color: var(--text-secondary); white-space: pre-wrap; }
     .msg.assistant::before { content: "AI: "; font-weight: 600; color: var(--ctp-green); }
     .msg.error { color: var(--ctp-red); font-size: var(--font-size-sm); }
+    .msg.pending { color: var(--text-muted); font-style: italic; }
+    .msg.pending::before { content: ""; }
     .input-area {
       display: flex; gap: 8px; padding: 12px 14px;
       border-top: 1px solid var(--border);
@@ -78,6 +91,7 @@ export class CsChat extends LitElement {
     _messages: { state: true },
     _sending: { state: true },
     _context: { state: true },
+    _ideaNode: { state: true },
   };
 
   constructor() {
@@ -85,19 +99,45 @@ export class CsChat extends LitElement {
     this._messages = [];
     this._sending = false;
     this._history = [];
+    this._ideaNode = null;
     this._updateContext();
-    this._boundStoreHandler = this._updateContext.bind(this);
+    this._boundStoreHandler = this._onStoreChanged.bind(this);
   }
 
   connectedCallback() {
     super.connectedCallback();
     store.addEventListener('state-changed', this._boundStoreHandler);
     this._updateContext();
+
+    // In webview mode, listen for chat responses from extension
+    if (window.__CODESIGHT_WEBVIEW__) {
+      this._messageHandler = (event) => {
+        const msg = event.data;
+        if (msg.type === 'chatResponse') {
+          this._handleChatResponse(msg);
+        }
+      };
+      window.addEventListener('message', this._messageHandler);
+    }
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
     store.removeEventListener('state-changed', this._boundStoreHandler);
+    if (this._messageHandler) {
+      window.removeEventListener('message', this._messageHandler);
+    }
+  }
+
+  _onStoreChanged(e) {
+    const { key, keys } = e.detail || {};
+    const changed = keys || [key];
+    this._updateContext();
+
+    // When an idea node is selected, update context and auto-open chat
+    if (changed.includes('activeIdeaNode')) {
+      this._updateIdeaContext();
+    }
   }
 
   _updateContext() {
@@ -113,6 +153,26 @@ export class CsChat extends LitElement {
     }
   }
 
+  _updateIdeaContext() {
+    const nodeId = store.state.activeIdeaNode;
+    const idea = store.state.DATA?.ideaStructure;
+    if (!nodeId || !idea) {
+      this._ideaNode = null;
+      return;
+    }
+    const node = idea.nodes.find(n => n.id === nodeId);
+    this._ideaNode = node || null;
+  }
+
+  /**
+   * Set the idea context externally (e.g., when clicking an idea node).
+   * Also opens the chat panel and pre-fills a question.
+   */
+  setIdeaContext(node) {
+    this._ideaNode = node;
+    store.set('chatOpen', true);
+  }
+
   async _send() {
     if (this._sending) return;
     const textarea = this.renderRoot.querySelector('textarea');
@@ -124,12 +184,53 @@ export class CsChat extends LitElement {
     this._messages = [...this._messages, { role: 'user', text: message }];
     this._sending = true;
 
+    // Build context including idea node if active
     const context = {
       currentLevel: store.state.currentLevel,
       currentModule: store.state.currentModule,
       currentFile: store.state.currentFile?.path || null,
+      ideaNode: this._ideaNode ? {
+        label: this._ideaNode.label,
+        description: this._ideaNode.description,
+        codeRefs: this._ideaNode.codeRefs,
+      } : null,
     };
 
+    if (window.__CODESIGHT_WEBVIEW__) {
+      // VS Code webview mode — route through extension
+      const assistantMsg = { role: 'pending', text: 'Waiting for response...' };
+      this._messages = [...this._messages, assistantMsg];
+      this._scrollToBottom();
+
+      window.__CODESIGHT_VSCODE__.postMessage({
+        type: 'chatRequest',
+        message,
+        context,
+        history: this._history.slice(-10),
+      });
+      // Response comes back via 'chatResponse' message handler
+    } else {
+      // Standalone mode — use /api/chat endpoint (SSE)
+      await this._sendViaApi(message, context);
+    }
+  }
+
+  _handleChatResponse(msg) {
+    // Remove the pending message
+    this._messages = this._messages.filter(m => m.role !== 'pending');
+
+    if (msg.error) {
+      this._messages = [...this._messages, { role: 'error', text: msg.error }];
+    } else {
+      this._messages = [...this._messages, { role: 'assistant', text: msg.text }];
+      this._history.push({ role: 'user', content: msg.originalMessage || '' });
+      this._history.push({ role: 'assistant', content: msg.text });
+    }
+    this._sending = false;
+    this._scrollToBottom();
+  }
+
+  async _sendViaApi(message, context) {
     const assistantMsg = { role: 'assistant', text: '' };
     this._messages = [...this._messages, assistantMsg];
 
@@ -184,7 +285,7 @@ export class CsChat extends LitElement {
 
   _scrollToBottom() {
     const msgs = this.renderRoot.querySelector('.messages');
-    if (msgs) msgs.scrollTop = msgs.scrollHeight;
+    if (msgs) requestAnimationFrame(() => { msgs.scrollTop = msgs.scrollHeight; });
   }
 
   _onKeydown(e) {
@@ -207,11 +308,24 @@ export class CsChat extends LitElement {
         <button class="close-btn" @click=${() => store.set('chatOpen', false)}>&times;</button>
       </div>
       <div class="context">${this._context}</div>
+      ${this._ideaNode ? html`
+        <div class="idea-context">
+          <div class="label">${this._ideaNode.label}</div>
+          <div class="desc">${this._ideaNode.description}</div>
+          ${this._ideaNode.codeRefs?.length ? html`
+            <div class="refs">Code: ${this._ideaNode.codeRefs.map(r =>
+              r.type === 'module' ? r.name : r.path
+            ).join(', ')}</div>
+          ` : ''}
+        </div>
+      ` : ''}
       <div class="messages">
         ${this._messages.map(m => html`<div class="msg ${m.role}">${m.text}</div>`)}
       </div>
       <div class="input-area">
-        <textarea placeholder="Ask about this code..." rows="1"
+        <textarea placeholder="${this._ideaNode
+          ? `Ask about "${this._ideaNode.label}"...`
+          : 'Ask about this code...'}" rows="1"
           @keydown=${this._onKeydown} @input=${this._onInput}></textarea>
         <button class="send" @click=${this._send} ?disabled=${this._sending}>Send</button>
       </div>

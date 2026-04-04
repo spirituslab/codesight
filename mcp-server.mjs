@@ -477,6 +477,78 @@ server.tool(
   }
 );
 
+// ─── Tool: chat_respond ──────────────────────────────────────────
+
+server.tool(
+  "codesight_chat_respond",
+  "Check if there's a pending chat question from the VS Code graph UI and respond to it. The VS Code extension writes questions to .codesight/chat-request.json when the user asks in the chat panel. Read the question, answer it using the project context, then write the response.",
+  {},
+  async () => {
+    const requestFile = join(projectRoot, '.codesight', 'chat-request.json');
+    const responseFile = join(projectRoot, '.codesight', 'chat-response.json');
+
+    try {
+      const { readFileSync, existsSync } = await import('fs');
+      if (!existsSync(requestFile)) {
+        return {
+          content: [{ type: "text", text: "No pending chat request found." }],
+        };
+      }
+
+      const request = JSON.parse(readFileSync(requestFile, 'utf-8'));
+      const result = await getAnalysis();
+
+      return {
+        content: [{
+          type: "text",
+          text: `The user asked this question in the Codesight graph chat panel. Please answer it, then call codesight_chat_send_response with your answer.
+
+Question: ${request.message}
+
+Context: ${request.context}
+
+Project: ${result.projectName} (${result.modules.length} modules, ${result.languages.join(', ')})
+Modules: ${result.modules.map(m => m.name).join(', ')}
+
+${request.history?.length ? 'Recent conversation:\n' + request.history.map(h => `${h.role}: ${h.content}`).join('\n') : ''}`,
+        }],
+      };
+    } catch (err) {
+      return {
+        content: [{ type: "text", text: `Error reading chat request: ${err.message}` }],
+      };
+    }
+  }
+);
+
+// ─── Tool: chat_send_response ────────────────────────────────────
+
+server.tool(
+  "codesight_chat_send_response",
+  "Send a response back to the VS Code graph chat panel. Write the response to .codesight/chat-response.json so the extension picks it up.",
+  {
+    text: z.string().describe("The response text to display in the chat panel"),
+  },
+  async ({ text }) => {
+    const responseFile = join(projectRoot, '.codesight', 'chat-response.json');
+    try {
+      mkdirSync(join(projectRoot, '.codesight'), { recursive: true });
+      writeFileSync(responseFile, JSON.stringify({
+        text,
+        timestamp: Date.now(),
+      }, null, 2));
+
+      return {
+        content: [{ type: "text", text: "Response sent to VS Code chat panel." }],
+      };
+    } catch (err) {
+      return {
+        content: [{ type: "text", text: `Error writing response: ${err.message}` }],
+      };
+    }
+  }
+);
+
 // ─── Tool: refresh ───────────────────────────────────────────────
 
 server.tool(
