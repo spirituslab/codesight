@@ -188,6 +188,7 @@ var WebviewManager = class {
       <cs-tour-panel slot="tours"></cs-tour-panel>
     </cs-sidebar>
     <cs-graph slot="graph"></cs-graph>
+    <cs-chat slot="chat"></cs-chat>
   </cs-app>
   <cs-global-search></cs-global-search>
   <cs-code-popup></cs-code-popup>
@@ -201,6 +202,7 @@ var WebviewManager = class {
     import '${webSrcUri}/components/cs-app.js';
     import '${webSrcUri}/components/cs-graph.js';
     import '${webSrcUri}/components/cs-sidebar.js';
+    import '${webSrcUri}/components/cs-chat.js';
     import '${webSrcUri}/components/cs-global-search.js';
     import '${webSrcUri}/components/cs-code-popup.js';
     import '${webSrcUri}/panels/cs-explorer.js';
@@ -457,6 +459,19 @@ var SUPPORTED_EXTENSIONS = /* @__PURE__ */ new Set([
 ]);
 function setupFileWatcher(context, analyzer2, webviewManager2) {
   let debounceTimer = null;
+  const mergeIdeaStructure2 = (result) => {
+    if (!workspaceRoot || !result) return;
+    const ideaFile = path3.join(workspaceRoot, ".codesight", "idea-structure.json");
+    try {
+      if (fs.existsSync(ideaFile)) {
+        const ideaStructure = JSON.parse(fs.readFileSync(ideaFile, "utf-8"));
+        if (ideaStructure.nodes) {
+          result.ideaStructure = ideaStructure;
+        }
+      }
+    } catch (_) {
+    }
+  };
   const saveDisposable = vscode4.workspace.onDidSaveTextDocument((document) => {
     const ext = "." + document.fileName.split(".").pop()?.toLowerCase();
     if (!SUPPORTED_EXTENSIONS.has(ext)) return;
@@ -465,6 +480,7 @@ function setupFileWatcher(context, analyzer2, webviewManager2) {
       debounceTimer = null;
       const result = await analyzer2.runIncrementalUpdate(document.fileName);
       if (result) {
+        mergeIdeaStructure2(result);
         webviewManager2.postMessage({ type: "updateData", data: result });
       }
     }, 500);
@@ -684,10 +700,26 @@ function parseJSON(text) {
 }
 
 // src/extension.ts
+var fs2 = __toESM(require("fs"));
+var path4 = __toESM(require("path"));
 var analyzer = null;
 var webviewManager;
 function getWorkspaceRoot() {
   return vscode6.workspace.workspaceFolders?.[0]?.uri.fsPath || null;
+}
+function mergeIdeaStructure(result) {
+  const root = getWorkspaceRoot();
+  if (!root || !result) return;
+  try {
+    const ideaFile = path4.join(root, ".codesight", "idea-structure.json");
+    if (fs2.existsSync(ideaFile)) {
+      const ideaStructure = JSON.parse(fs2.readFileSync(ideaFile, "utf-8"));
+      if (ideaStructure.nodes) {
+        result.ideaStructure = ideaStructure;
+      }
+    }
+  } catch (_) {
+  }
 }
 function ensureAnalyzer() {
   const root = getWorkspaceRoot();
@@ -718,6 +750,7 @@ function activate(context) {
       }
       const result = a.getResult();
       if (result) {
+        mergeIdeaStructure(result);
         webviewManager.postMessage({ type: "updateData", data: result });
       } else {
         vscode6.window.showErrorMessage("Codesight: Analysis failed. Check the Output panel for details.");
@@ -734,6 +767,7 @@ function activate(context) {
       );
       const result = a.getResult();
       if (result) {
+        mergeIdeaStructure(result);
         webviewManager.postMessage({ type: "updateData", data: result });
       }
     }),
@@ -763,6 +797,7 @@ function activate(context) {
     } else if (msg.type === "ready" && analyzer) {
       const result = analyzer.getResult();
       if (result) {
+        mergeIdeaStructure(result);
         webviewManager.postMessage({ type: "updateData", data: result });
       }
     } else if (msg.type === "requestRefresh") {
@@ -797,6 +832,32 @@ async function handleChatRequest(msg, analyzerInstance, webview) {
       contextText += `Related code: ${context.ideaNode.codeRefs.map(
         (r) => r.type === "module" ? `module:${r.name}` : r.path
       ).join(", ")}
+`;
+    }
+  }
+  if (context.focusedNode) {
+    const fn = context.focusedNode;
+    if (fn.type === "module") {
+      contextText += `The user is asking about module "${fn.data.name}" (${fn.data.files?.length || 0} files, ${fn.data.lineCount || 0} lines)
+`;
+      if (fn.data.description) contextText += `Description: ${fn.data.description}
+`;
+    } else if (fn.type === "file") {
+      contextText += `The user is asking about file "${fn.data.name || fn.data.path}"
+`;
+      if (fn.data.symbols?.length) {
+        contextText += `Symbols: ${fn.data.symbols.slice(0, 15).map((s) => `${s.kind} ${s.name}`).join(", ")}
+`;
+      }
+    } else if (fn.type === "symbol") {
+      contextText += `The user is asking about ${fn.data.kind} "${fn.data.name}"
+`;
+      if (fn.data.signature) contextText += `Signature: ${fn.data.signature}
+`;
+      if (fn.data.comment) contextText += `Comment: ${fn.data.comment}
+`;
+      if (fn.data.source) contextText += `Source:
+${fn.data.source.slice(0, 1500)}
 `;
     }
   }
@@ -838,47 +899,42 @@ User: ${message}`;
   }
   const root = getWorkspaceRoot();
   if (root) {
-    const fs2 = require("fs");
-    const path4 = require("path");
-    const outDir = path4.join(root, ".codesight");
-    fs2.mkdirSync(outDir, { recursive: true });
-    const requestFile = path4.join(outDir, "chat-request.json");
-    fs2.writeFileSync(requestFile, JSON.stringify({
+    const fs3 = require("fs");
+    const path5 = require("path");
+    const outDir = path5.join(root, ".codesight");
+    fs3.mkdirSync(outDir, { recursive: true });
+    const requestFile = path5.join(outDir, "chat-request.json");
+    fs3.writeFileSync(requestFile, JSON.stringify({
       message,
       context: contextText,
       history: history?.slice(-6),
       timestamp: Date.now()
     }, null, 2));
-    const responseFile = path4.join(outDir, "chat-response.json");
+    const responseFile = path5.join(outDir, "chat-response.json");
+    const requestTimestamp = Date.now();
     try {
-      fs2.unlinkSync(responseFile);
+      fs3.unlinkSync(responseFile);
     } catch (_) {
     }
-    const startTime = Date.now();
     const poll = setInterval(() => {
       try {
-        if (fs2.existsSync(responseFile)) {
-          const data = JSON.parse(fs2.readFileSync(responseFile, "utf-8"));
-          if (data.timestamp > startTime) {
-            clearInterval(poll);
-            webview.postMessage({ type: "chatResponse", text: data.text, originalMessage: message });
-            try {
-              fs2.unlinkSync(responseFile);
-            } catch (_) {
-            }
+        if (!fs3.existsSync(responseFile)) return;
+        const raw = fs3.readFileSync(responseFile, "utf-8");
+        const data = JSON.parse(raw);
+        if (data.timestamp && data.timestamp > requestTimestamp - 1e3) {
+          clearInterval(poll);
+          webview.postMessage({ type: "chatResponse", text: data.text, originalMessage: message });
+          try {
+            fs3.unlinkSync(responseFile);
+          } catch (_) {
           }
         }
       } catch (_) {
       }
-      if (Date.now() - startTime > 6e4) {
-        clearInterval(poll);
-        webview.postMessage({
-          type: "chatResponse",
-          error: "No LLM available. Use Claude Code to answer: the question is saved in .codesight/chat-request.json",
-          originalMessage: message
-        });
-      }
-    }, 500);
+    }, 1e3);
+    setTimeout(() => {
+      clearInterval(poll);
+    }, 18e4);
   } else {
     webview.postMessage({
       type: "chatResponse",

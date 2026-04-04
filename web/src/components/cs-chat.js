@@ -92,6 +92,7 @@ export class CsChat extends LitElement {
     _sending: { state: true },
     _context: { state: true },
     _ideaNode: { state: true },
+    _focusedNode: { state: true },
   };
 
   constructor() {
@@ -100,6 +101,7 @@ export class CsChat extends LitElement {
     this._sending = false;
     this._history = [];
     this._ideaNode = null;
+    this._focusedNode = null; // { type: 'module'|'file'|'symbol', data: ... }
     this._updateContext();
     this._boundStoreHandler = this._onStoreChanged.bind(this);
   }
@@ -166,10 +168,23 @@ export class CsChat extends LitElement {
 
   /**
    * Set the idea context externally (e.g., when clicking an idea node).
-   * Also opens the chat panel and pre-fills a question.
+   * Opens the chat panel with concept context.
    */
   setIdeaContext(node) {
     this._ideaNode = node;
+    this._focusedNode = null;
+    store.set('chatOpen', true);
+  }
+
+  /**
+   * Set chat focus to a code node (module, file, or symbol).
+   * Opens the chat panel with that node as context.
+   * @param {'module'|'file'|'symbol'} type
+   * @param {object} data - the node data (module object, file object, or symbol object)
+   */
+  setCodeContext(type, data) {
+    this._focusedNode = { type, data };
+    this._ideaNode = null;
     store.set('chatOpen', true);
   }
 
@@ -184,7 +199,7 @@ export class CsChat extends LitElement {
     this._messages = [...this._messages, { role: 'user', text: message }];
     this._sending = true;
 
-    // Build context including idea node if active
+    // Build context including focused node
     const context = {
       currentLevel: store.state.currentLevel,
       currentModule: store.state.currentModule,
@@ -194,6 +209,7 @@ export class CsChat extends LitElement {
         description: this._ideaNode.description,
         codeRefs: this._ideaNode.codeRefs,
       } : null,
+      focusedNode: this._focusedNode || null,
     };
 
     if (window.__CODESIGHT_WEBVIEW__) {
@@ -318,6 +334,13 @@ export class CsChat extends LitElement {
             ).join(', ')}</div>
           ` : ''}
         </div>
+      ` : this._focusedNode ? html`
+        <div class="idea-context">
+          <div class="label">${this._focusedNode.type}: ${this._focusedNode.data?.name || this._focusedNode.data?.path || ''}</div>
+          ${this._focusedNode.data?.description ? html`<div class="desc">${this._focusedNode.data.description}</div>` : ''}
+          ${this._focusedNode.data?.signature ? html`<div class="refs">${this._focusedNode.data.signature}</div>` : ''}
+          ${this._focusedNode.type === 'module' ? html`<div class="refs">${this._focusedNode.data?.files?.length || 0} files, ${this._focusedNode.data?.lineCount || 0} lines</div>` : ''}
+        </div>
       ` : ''}
       <div class="messages">
         ${this._messages.map(m => html`<div class="msg ${m.role}">${m.text}</div>`)}
@@ -325,7 +348,9 @@ export class CsChat extends LitElement {
       <div class="input-area">
         <textarea placeholder="${this._ideaNode
           ? `Ask about "${this._ideaNode.label}"...`
-          : 'Ask about this code...'}" rows="1"
+          : this._focusedNode
+            ? `Ask about ${this._focusedNode.data?.name || this._focusedNode.type}...`
+            : 'Ask about this code...'}" rows="1"
           @keydown=${this._onKeydown} @input=${this._onInput}></textarea>
         <button class="send" @click=${this._send} ?disabled=${this._sending}>Send</button>
       </div>

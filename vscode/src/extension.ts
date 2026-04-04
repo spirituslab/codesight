@@ -5,12 +5,28 @@ import { setupNavigation } from './navigation';
 import { registerChatParticipant } from './chat-participant';
 import { setupFileWatcher } from './watcher';
 import { generateIdeaLayer } from './idea-layer';
+import * as fs from 'fs';
+import * as path from 'path';
 
 let analyzer: AnalyzerWrapper | null = null;
 let webviewManager: WebviewManager;
 
 function getWorkspaceRoot(): string | null {
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || null;
+}
+
+function mergeIdeaStructure(result: any) {
+  const root = getWorkspaceRoot();
+  if (!root || !result) return;
+  try {
+    const ideaFile = path.join(root, '.codesight', 'idea-structure.json');
+    if (fs.existsSync(ideaFile)) {
+      const ideaStructure = JSON.parse(fs.readFileSync(ideaFile, 'utf-8'));
+      if (ideaStructure.nodes) {
+        result.ideaStructure = ideaStructure;
+      }
+    }
+  } catch (_) {}
 }
 
 function ensureAnalyzer(): AnalyzerWrapper | null {
@@ -45,6 +61,7 @@ export function activate(context: vscode.ExtensionContext) {
       }
       const result = a.getResult();
       if (result) {
+        mergeIdeaStructure(result);
         webviewManager.postMessage({ type: 'updateData', data: result });
       } else {
         vscode.window.showErrorMessage('Codesight: Analysis failed. Check the Output panel for details.');
@@ -61,6 +78,7 @@ export function activate(context: vscode.ExtensionContext) {
       );
       const result = a.getResult();
       if (result) {
+        mergeIdeaStructure(result);
         webviewManager.postMessage({ type: 'updateData', data: result });
       }
     }),
@@ -96,6 +114,7 @@ export function activate(context: vscode.ExtensionContext) {
     } else if (msg.type === 'ready' && analyzer) {
       const result = analyzer.getResult();
       if (result) {
+        mergeIdeaStructure(result);
         webviewManager.postMessage({ type: 'updateData', data: result });
       }
     } else if (msg.type === 'requestRefresh') {
@@ -139,6 +158,23 @@ async function handleChatRequest(
       contextText += `Related code: ${context.ideaNode.codeRefs.map((r: any) =>
         r.type === 'module' ? `module:${r.name}` : r.path
       ).join(', ')}\n`;
+    }
+  }
+  if (context.focusedNode) {
+    const fn = context.focusedNode;
+    if (fn.type === 'module') {
+      contextText += `The user is asking about module "${fn.data.name}" (${fn.data.files?.length || 0} files, ${fn.data.lineCount || 0} lines)\n`;
+      if (fn.data.description) contextText += `Description: ${fn.data.description}\n`;
+    } else if (fn.type === 'file') {
+      contextText += `The user is asking about file "${fn.data.name || fn.data.path}"\n`;
+      if (fn.data.symbols?.length) {
+        contextText += `Symbols: ${fn.data.symbols.slice(0, 15).map((s: any) => `${s.kind} ${s.name}`).join(', ')}\n`;
+      }
+    } else if (fn.type === 'symbol') {
+      contextText += `The user is asking about ${fn.data.kind} "${fn.data.name}"\n`;
+      if (fn.data.signature) contextText += `Signature: ${fn.data.signature}\n`;
+      if (fn.data.comment) contextText += `Comment: ${fn.data.comment}\n`;
+      if (fn.data.source) contextText += `Source:\n${fn.data.source.slice(0, 1500)}\n`;
     }
   }
   if (context.currentFile && result) {
@@ -190,33 +226,30 @@ async function handleChatRequest(
       timestamp: Date.now(),
     }, null, 2));
 
-    // Watch for response file
+    // Watch for response file via polling
     const responseFile = path.join(outDir, 'chat-response.json');
+    const requestTimestamp = Date.now();
+
     // Delete old response if exists
     try { fs.unlinkSync(responseFile); } catch (_) {}
 
-    // Poll for response (up to 60 seconds)
-    const startTime = Date.now();
     const poll = setInterval(() => {
       try {
-        if (fs.existsSync(responseFile)) {
-          const data = JSON.parse(fs.readFileSync(responseFile, 'utf-8'));
-          if (data.timestamp > startTime) {
-            clearInterval(poll);
-            webview.postMessage({ type: 'chatResponse', text: data.text, originalMessage: message });
-            try { fs.unlinkSync(responseFile); } catch (_) {}
-          }
+        if (!fs.existsSync(responseFile)) return;
+        const raw = fs.readFileSync(responseFile, 'utf-8');
+        const data = JSON.parse(raw);
+        if (data.timestamp && data.timestamp > requestTimestamp - 1000) {
+          clearInterval(poll);
+          webview.postMessage({ type: 'chatResponse', text: data.text, originalMessage: message });
+          try { fs.unlinkSync(responseFile); } catch (_) {}
         }
       } catch (_) {}
-      if (Date.now() - startTime > 60000) {
-        clearInterval(poll);
-        webview.postMessage({
-          type: 'chatResponse',
-          error: 'No LLM available. Use Claude Code to answer: the question is saved in .codesight/chat-request.json',
-          originalMessage: message,
-        });
-      }
-    }, 500);
+    }, 1000);
+
+    // Timeout after 3 minutes
+    setTimeout(() => {
+      clearInterval(poll);
+    }, 180000);
   } else {
     webview.postMessage({
       type: 'chatResponse',

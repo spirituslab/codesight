@@ -19,6 +19,20 @@ export function setupFileWatcher(
 ) {
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // Helper: merge idea structure from file into analysis result
+  const mergeIdeaStructure = (result: any) => {
+    if (!workspaceRoot || !result) return;
+    const ideaFile = path.join(workspaceRoot, '.codesight', 'idea-structure.json');
+    try {
+      if (fs.existsSync(ideaFile)) {
+        const ideaStructure = JSON.parse(fs.readFileSync(ideaFile, 'utf-8'));
+        if (ideaStructure.nodes) {
+          result.ideaStructure = ideaStructure;
+        }
+      }
+    } catch (_) {}
+  };
+
   // Watch for source file saves → re-analyze
   const saveDisposable = vscode.workspace.onDidSaveTextDocument((document) => {
     const ext = '.' + document.fileName.split('.').pop()?.toLowerCase();
@@ -29,6 +43,7 @@ export function setupFileWatcher(
       debounceTimer = null;
       const result = await analyzer.runIncrementalUpdate(document.fileName);
       if (result) {
+        mergeIdeaStructure(result);
         webviewManager.postMessage({ type: 'updateData', data: result });
       }
     }, 500);
