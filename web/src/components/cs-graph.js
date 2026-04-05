@@ -206,7 +206,7 @@ export class CsGraph extends LitElement {
 
   firstUpdated() {
     this._initCytoscape();
-    // Redraw mapping lines when layout changes (e.g. chat panel open/close)
+    // Redraw mapping lines when layout changes (e.g. sidebar open/close)
     const sceneWrapper = this.renderRoot.querySelector('#scene-wrapper');
     if (sceneWrapper) {
       this._resizeObserver = new ResizeObserver(() => {
@@ -472,31 +472,6 @@ export class CsGraph extends LitElement {
     });
 
     this._cyCode.on('tap', 'node', (e) => this._handleNodeTap(e));
-
-    // Right-click (cxttap) opens chat with context about that node
-    this._cyCode.on('cxttap', 'node', (e) => {
-      e.originalEvent?.preventDefault();
-      const node = e.target;
-      const info = node.data('info');
-      const nodeType = node.data('nodeType');
-      const level = store.state.currentLevel;
-      const chat = document.querySelector('cs-chat');
-      if (!chat) return;
-
-      if (level === 'modules') {
-        if (info) {
-          const name = info.name || node.data('id');
-          const mod = store.state.DATA?.modules?.find(m => m.name === name);
-          if (mod) chat.setCodeContext('module', mod);
-        }
-      } else if (level === 'files' && info) {
-        chat.setCodeContext('file', info);
-      } else if (level === 'symbols' && nodeType === 'export' && info) {
-        chat.setCodeContext('symbol', info);
-      } else if (level === 'symbols' && nodeType === 'file' && info) {
-        chat.setCodeContext('file', info);
-      }
-    });
 
     this._cyCode.on('mouseover', 'node', (e) => {
       this._highlightConnected(e.target);
@@ -1232,20 +1207,13 @@ export class CsGraph extends LitElement {
       }
     });
 
-    // Right-click: open chat with idea context
+    // Right-click: select idea node and highlight mappings
     this._cyIdea.on('cxttap', 'node', (e) => {
       e.originalEvent?.preventDefault();
       const nodeId = e.target.data('id');
       store.set('activeIdeaNode', nodeId);
       this._highlightIdeaNode(nodeId);
       this._drawMappingLines();
-      // Open chat with idea context
-      const idea = store.state.DATA?.ideaStructure;
-      const node = idea?.nodes?.find(n => n.id === nodeId);
-      if (node) {
-        const chat = document.querySelector('cs-chat');
-        if (chat) chat.setIdeaContext(node);
-      }
     });
 
     this._cyIdea.on('mouseover', 'node', (e) => {

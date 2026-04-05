@@ -7,7 +7,6 @@ import './cs-activity-bar.js';
 import './cs-status-bar.js';
 import './cs-breadcrumb.js';
 import './cs-graph.js';
-import './cs-chat.js';
 import './cs-sidebar.js';
 import './cs-global-search.js';
 import './cs-code-popup.js';
@@ -61,38 +60,21 @@ export class CsApp extends LitElement {
       flex: 1;
       min-height: 0;
     }
-    .chat-panel {
-      width: 320px;
-      flex-shrink: 0;
-      border-left: 1px solid var(--accent-secondary);
-      transition: width 0.2s ease;
-      overflow: hidden;
-      display: flex;
-      flex-direction: column;
-    }
-    ::slotted([slot="chat"]) {
-      flex: 1;
-      min-height: 0;
-    }
-    .chat-panel.closed { width: 0; border: none; }
   `];
 
   static properties = {
     _sidebarCollapsed: { state: true },
-    _chatOpen: { state: true },
   };
 
   constructor() {
     super();
     this._sidebarCollapsed = false;
-    this._chatOpen = false;
     this._boundStoreHandler = this._onStoreChanged.bind(this);
     this._docListeners = [];
   }
 
   _onStoreChanged() {
     this._sidebarCollapsed = store.state.sidebarCollapsed;
-    this._chatOpen = store.state.chatOpen;
   }
 
   _addDocListener(event, handler) {
@@ -152,11 +134,6 @@ export class CsApp extends LitElement {
   // ─── Keyboard shortcuts ──────────────────────────────────────────
   _bindKeyboard() {
     this._addDocListener('keydown', (e) => {
-      // Ctrl+/ → toggle chat
-      if ((e.ctrlKey || e.metaKey) && e.key === '/') {
-        e.preventDefault();
-        store.set('chatOpen', !store.state.chatOpen);
-      }
       // Ctrl+B → toggle sidebar
       if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
         e.preventDefault();
@@ -187,12 +164,7 @@ export class CsApp extends LitElement {
       cp.close();
       return;
     }
-    // Layer 3: close chat if open
-    if (store.state.chatOpen) {
-      store.set('chatOpen', false);
-      return;
-    }
-    // Layer 4: navigate back one level in the graph
+    // Layer 3: navigate back one level in the graph
     this._goBack();
   }
 
@@ -349,9 +321,6 @@ export class CsApp extends LitElement {
         </div>
         <div class="graph-area">
           <slot name="graph"></slot>
-        </div>
-        <div class="chat-panel ${this._chatOpen ? '' : 'closed'}">
-          <slot name="chat"></slot>
         </div>
       </div>
       <cs-status-bar></cs-status-bar>

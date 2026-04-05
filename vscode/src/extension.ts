@@ -11,7 +11,6 @@ import * as path from 'path';
 let analyzer: AnalyzerWrapper | null = null;
 let webviewManager: WebviewManager;
 let fileWatcherDisposable: vscode.Disposable | null = null;
-const activeTimers: Array<ReturnType<typeof setInterval> | ReturnType<typeof setTimeout>> = [];
 
 function getWorkspaceRoot(): string | null {
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || null;
@@ -127,8 +126,6 @@ export function activate(context: vscode.ExtensionContext) {
       }
     } else if (msg.type === 'requestRefresh') {
       vscode.commands.executeCommand('codesight.refresh');
-    } else if (msg.type === 'chatRequest') {
-      handleChatRequest(msg, analyzer, webviewManager);
     }
   });
 
@@ -169,173 +166,5 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 export function deactivate() {
-  for (const timer of activeTimers) {
-    clearInterval(timer);
-    clearTimeout(timer);
-  }
-  activeTimers.length = 0;
   analyzer = null;
-}
-
-function pickBestChatModel(models: vscode.LanguageModelChat[]): vscode.LanguageModelChat {
-  const tierPatterns: Array<{ pattern: RegExp; score: number }> = [
-    { pattern: /claude.*opus|opus/i, score: 100 },
-    { pattern: /gpt-?5(?!.*mini)/i, score: 95 },
-    { pattern: /claude.*sonnet|sonnet/i, score: 90 },
-    { pattern: /gpt-?4\.?1(?!.*mini|.*nano)/i, score: 85 },
-    { pattern: /gpt-?4o(?!.*mini)/i, score: 80 },
-    { pattern: /claude.*haiku|haiku/i, score: 60 },
-    { pattern: /gpt-?5.*mini/i, score: 55 },
-    { pattern: /gpt-?4o.*mini/i, score: 50 },
-    { pattern: /gpt-?4\.?1.*mini/i, score: 48 },
-    { pattern: /gpt-?4\.?1.*nano/i, score: 40 },
-    { pattern: /raptor/i, score: 30 },
-    { pattern: /preview/i, score: -5 },
-  ];
-
-  function scoreModel(m: vscode.LanguageModelChat): number {
-    const text = `${m.name} ${m.id} ${(m as any).family || ''} ${(m as any).vendor || ''}`;
-    let score = 0;
-    for (const { pattern, score: s } of tierPatterns) {
-      if (pattern.test(text)) score += s;
-    }
-    if (m.maxInputTokens) {
-      score += Math.min(10, Math.floor(m.maxInputTokens / 20000));
-    }
-    return score;
-  }
-
-  const scored = models.map(m => ({ model: m, score: scoreModel(m) }));
-  scored.sort((a, b) => b.score - a.score);
-  return scored[0].model;
-}
-
-async function handleChatRequest(
-  msg: any,
-  analyzerInstance: AnalyzerWrapper | null,
-  webview: WebviewManager
-) {
-  const { message, context, history } = msg;
-  const result = analyzerInstance?.getResult();
-
-  // Build context string
-  let contextText = '';
-  if (context.ideaNode) {
-    contextText += `The user is asking about the concept "${context.ideaNode.label}": ${context.ideaNode.description}\n`;
-    if (context.ideaNode.codeRefs?.length) {
-      contextText += `Related code: ${context.ideaNode.codeRefs.map((r: any) =>
-        r.type === 'module' ? `module:${r.name}` : r.path
-      ).join(', ')}\n`;
-    }
-  }
-  if (context.focusedNode) {
-    const fn = context.focusedNode;
-    if (fn.type === 'module') {
-      contextText += `The user is asking about module "${fn.data.name}" (${fn.data.files?.length || 0} files, ${fn.data.lineCount || 0} lines)\n`;
-      if (fn.data.description) contextText += `Description: ${fn.data.description}\n`;
-    } else if (fn.type === 'file') {
-      contextText += `The user is asking about file "${fn.data.name || fn.data.path}"\n`;
-      if (fn.data.symbols?.length) {
-        contextText += `Symbols: ${fn.data.symbols.slice(0, 15).map((s: any) => `${s.kind} ${s.name}`).join(', ')}\n`;
-      }
-    } else if (fn.type === 'symbol') {
-      contextText += `The user is asking about ${fn.data.kind} "${fn.data.name}"\n`;
-      if (fn.data.signature) contextText += `Signature: ${fn.data.signature}\n`;
-      if (fn.data.comment) contextText += `Comment: ${fn.data.comment}\n`;
-      if (fn.data.source) contextText += `Source:\n${fn.data.source.slice(0, 1500)}\n`;
-    }
-  }
-  if (context.currentFile && result) {
-    // Find file details
-    for (const mod of result.modules || []) {
-      const file = mod.files?.find((f: any) => f.path === context.currentFile);
-      if (file) {
-        contextText += `Currently viewing: ${file.path} in module ${mod.name}\n`;
-        contextText += `Symbols: ${file.symbols?.map((s: any) => `${s.kind} ${s.name}`).join(', ')}\n`;
-        break;
-      }
-    }
-  }
-  if (result) {
-    contextText += `Project: ${result.projectName}, ${result.modules?.length} modules, ${result.languages?.join(', ')}\n`;
-  }
-
-  // Try vscode.lm first
-  try {
-    const models = await vscode.lm.selectChatModels();
-    if (models && models.length > 0) {
-      const model = pickBestChatModel(models);
-      const modelLabel = `${model.name}${(model as any).vendor ? ' (' + (model as any).vendor + ')' : ''}`;
-      const prompt = `You are a code structure expert. Use this context to answer the user's question.\n\n${contextText}\n\nUser: ${message}`;
-      const messages = [vscode.LanguageModelChatMessage.User(prompt)];
-      const response = await model.sendRequest(messages, {});
-      let fullText = '';
-      for await (const fragment of response.text) {
-        fullText += fragment;
-      }
-      webview.postMessage({ type: 'chatResponse', text: fullText, model: modelLabel, originalMessage: message });
-      return;
-    }
-  } catch (_) {
-    // vscode.lm not available — fall back to MCP file bridge
-  }
-
-  // Fall back: write chat request to .codesight/chat-request.json for MCP bridge
-  const root = getWorkspaceRoot();
-  if (root) {
-    const outDir = path.join(root, '.codesight');
-    fs.mkdirSync(outDir, { recursive: true });
-    const requestFile = path.join(outDir, 'chat-request.json');
-    fs.writeFileSync(requestFile, JSON.stringify({
-      message,
-      context: contextText,
-      history: history?.slice(-6),
-      timestamp: Date.now(),
-    }, null, 2));
-
-    // Watch for response file via polling
-    const responseFile = path.join(outDir, 'chat-response.json');
-    const requestTimestamp = Date.now();
-
-    // Delete old response if exists
-    try { fs.unlinkSync(responseFile); } catch (_) {}
-
-    let poll: ReturnType<typeof setInterval>;
-    let timeout: ReturnType<typeof setTimeout>;
-
-    const cleanup = () => {
-      clearInterval(poll);
-      clearTimeout(timeout);
-      const pollIdx = activeTimers.indexOf(poll);
-      if (pollIdx !== -1) activeTimers.splice(pollIdx, 1);
-      const timeoutIdx = activeTimers.indexOf(timeout);
-      if (timeoutIdx !== -1) activeTimers.splice(timeoutIdx, 1);
-    };
-
-    poll = setInterval(() => {
-      try {
-        if (!fs.existsSync(responseFile)) return;
-        const raw = fs.readFileSync(responseFile, 'utf-8');
-        const data = JSON.parse(raw);
-        if (data.timestamp && data.timestamp > requestTimestamp - 1000) {
-          cleanup();
-          webview.postMessage({ type: 'chatResponse', text: data.text, model: 'Claude Code (MCP)', originalMessage: message });
-          try { fs.unlinkSync(responseFile); } catch (_) {}
-        }
-      } catch (_) {}
-    }, 1000);
-    activeTimers.push(poll);
-
-    // Timeout after 3 minutes
-    timeout = setTimeout(() => {
-      cleanup();
-    }, 180000);
-    activeTimers.push(timeout);
-  } else {
-    webview.postMessage({
-      type: 'chatResponse',
-      error: 'No language model available and no workspace folder open.',
-      originalMessage: message,
-    });
-  }
 }

@@ -108,7 +108,6 @@ export class WebviewManager {
       <cs-tour-panel slot="tours"></cs-tour-panel>
     </cs-sidebar>
     <cs-graph slot="graph"></cs-graph>
-    <cs-chat slot="chat"></cs-chat>
   </cs-app>
   <cs-global-search></cs-global-search>
   <cs-code-popup></cs-code-popup>
@@ -122,7 +121,6 @@ export class WebviewManager {
     import '${webSrcUri}/components/cs-app.js';
     import '${webSrcUri}/components/cs-graph.js';
     import '${webSrcUri}/components/cs-sidebar.js';
-    import '${webSrcUri}/components/cs-chat.js';
     import '${webSrcUri}/components/cs-global-search.js';
     import '${webSrcUri}/components/cs-code-popup.js';
     import '${webSrcUri}/panels/cs-explorer.js';

@@ -1,18 +1,16 @@
 # Codesight
 
-Visualize any codebase as an interactive, drillable graph. No LLM required.
+Visualize any codebase as an interactive, drillable graph — from high-level directories down to individual functions.
 
-Codesight parses your code with tree-sitter, extracts symbols, resolves imports, builds call graphs, and renders everything as a navigable map — from high-level modules down to individual functions.
-
-Optionally, add an AI-powered **Idea Layer** that maps *what* your project does (features, concepts, architecture) to *where* it's implemented.
+Codesight uses tree-sitter to parse your code, extract symbols, resolve imports, and build call graphs. Everything renders as a navigable map inside VS Code. No LLM required for the core experience.
 
 Supports **TypeScript, JavaScript, Python, C, C++, and Java**.
 
 ---
 
-## Quick Start (VS Code)
+## Install
 
-**Prerequisites:** Node.js 18+, VS Code 1.90+, Git
+**Prerequisites:** [Node.js 18+](https://nodejs.org/), [VS Code 1.90+](https://code.visualstudio.com/), [Git](https://git-scm.com/)
 
 ```bash
 git clone https://github.com/spirituslab/codesight.git
@@ -22,25 +20,37 @@ cd vscode
 npm install
 npm run build
 npx @vscode/vsce package --allow-missing-repository
-code --install-extension codesight-0.1.0.vsix
+code --install-extension codesight-0.1.1.vsix
 ```
 
-Then in VS Code:
+That's it. Now open any project in VS Code and run:
 
-1. Open any project
-2. `Cmd+Shift+P` (or `Ctrl+Shift+P`) → **Codesight: Open Graph**
+`Ctrl+Shift+P` → **Codesight: Open Graph**
 
-That's it. The graph appears with your project's module structure.
+The graph appears with your project's structure.
 
 ---
 
-## Using the Graph
+## The Graph
 
-The graph has **4 drill-down levels**:
+The graph has **4 drill-down levels**, just like a file explorer:
 
-**Modules** → **Folders** → **Files** → **Symbols**
+**Directories** → **Folders** → **Files** → **Symbols**
 
-Click any node to drill in. Each level shows relationships (imports, dependencies, call edges) between items at that level.
+Click any node to drill in. Each level shows import relationships and call edges between items.
+
+### Node Shapes
+
+| Shape | Meaning |
+|-------|---------|
+| **Rounded rectangle** | Directory / module (L1) |
+| **Barrel** | Subfolder (L2) |
+| **Cut rectangle** | File (L2/L3) |
+| **Rounded rectangle** | Function / method (L4) |
+| **Hexagon** | Class / struct (L4) |
+| **Diamond** | Interface / type (L4) |
+| **Octagon** | Enum (L4) |
+| **Tag** | Constant (L4) |
 
 ### Navigation
 
@@ -48,74 +58,61 @@ Click any node to drill in. Each level shows relationships (imports, dependencie
 |--------|-------------|
 | **Click** node | Drill down into it |
 | **Click** symbol node | Opens the file at that line in VS Code |
-| **Right-click** any node | Open chat panel with that node as context |
 | **← button** | Go back one level |
-| **Breadcrumb path** | Click any segment to jump back to that level |
-| **Ctrl+/** | Toggle chat panel |
+| **Breadcrumb path** | Click any segment to jump to that level |
+| **Ctrl+K** | Global search across all nodes |
 
 ### Commands
 
 | Command | Description |
 |---------|-------------|
-| **Codesight: Open Graph** | Analyze and open the graph |
+| **Codesight: Open Graph** | Analyze and show the graph |
 | **Codesight: Refresh Analysis** | Re-analyze after code changes |
-| **Codesight: Generate Idea Layer** | Generate AI conceptual overlay (needs Copilot) |
-| **Reveal in Codesight Graph** | Right-click in editor → find symbol in graph |
+| **Codesight: Generate Idea Layer** | Generate AI conceptual overlay (needs Copilot or Claude Code) |
+| **Reveal in Codesight Graph** | Right-click a file in the editor → find it in the graph |
 
 ---
 
-## Idea Layer (Optional)
+## Idea Layer
 
-The idea layer is a second graph that shows *what* your project does — features, responsibilities, architectural patterns — with lines connecting each concept to the code that implements it.
+The idea layer is a second graph that shows *what* your project does — features, responsibilities, architecture — with lines connecting each concept to the code that implements it.
 
 ### How to generate it
 
-**Option A — GitHub Copilot (in VS Code):**
+You need either GitHub Copilot or Claude Code. Pick whichever you have:
 
-1. Install the **GitHub Copilot** extension and sign in
-2. `Cmd+Shift+P` → **Codesight: Generate Idea Layer**
+**Option A — GitHub Copilot:**
 
-> Requires the `github.copilot` extension (not just Copilot Chat). This is what provides the `vscode.lm` language model API.
+1. Install the [GitHub Copilot](https://marketplace.visualstudio.com/items?itemName=GitHub.copilot) extension and sign in
+2. `Ctrl+Shift+P` → **Codesight: Generate Idea Layer**
 
-**Option B — Claude Code (in terminal):**
+**Option B — Claude Code:**
+
+1. Install [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and add codesight to your project's MCP config (see [MCP Setup](#setup) below)
+2. In your terminal, ask:
 
 ```
-> use codesight to generate the idea layer for this project
+> Generate the idea layer for this project
 ```
 
-### Interacting with the idea layer
+### Using the idea layer
 
 | Action | What it does |
 |--------|-------------|
-| **Left-click** idea node | Highlights mapping lines to the code layer |
-| **Right-click** idea node | Opens chat panel with that concept as context |
-| **Click** background | Clears all highlights |
+| **Click** idea node | Highlights mapping lines to the code layer |
+| **Click** background | Clears highlights |
 
-The idea layer **persists across code refreshes**. When you refresh the analysis, the code layer updates but the idea layer stays — mappings to renamed or deleted code silently fade out.
-
----
-
-## Chat Panel
-
-Right-click any node (code or idea) to ask questions about it. The chat routes automatically:
-
-| Your setup | What happens |
-|---|---|
-| **GitHub Copilot** installed | Answered instantly via Copilot's LLM |
-| **Any vscode.lm extension** | Same — uses that model |
-| **Claude Code** (terminal) | Saved to `.codesight/chat-request.json`, answered via MCP |
+The idea layer **persists across refreshes** — when you refresh the code analysis, the idea layer stays. Mappings to renamed or deleted code silently fade out.
 
 ---
 
 ## MCP Integration (Claude Code)
 
-Codesight exposes code analysis as MCP tools for Claude Code and other MCP-compatible assistants.
+Codesight exposes structural intelligence as MCP tools for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). These give Claude access to call graphs, impact analysis, and code structure that it can't get from reading files alone.
 
 ### Setup
 
-The `.mcp.json` in the repo root auto-registers when you start Claude Code in the project directory.
-
-To use on **another project**, add to that project's `.mcp.json`:
+Add this to your project's `.mcp.json` (create the file in your project root if it doesn't exist):
 
 ```json
 {
@@ -128,35 +125,36 @@ To use on **another project**, add to that project's `.mcp.json`:
 }
 ```
 
+Replace `/path/to/codesight` with wherever you cloned the repo. Then start Claude Code in your project — the tools are available immediately.
+
 ### Tools
 
 | Tool | Description |
 |------|-------------|
-| `codesight_list_modules` | List all modules with file counts and dependencies |
-| `codesight_get_module` | Detailed info about a specific module |
-| `codesight_explain_file` | File's symbols, imports, and module membership |
-| `codesight_search_symbols` | Search for functions/classes/types by name |
-| `codesight_impact_analysis` | What would be affected by changing a file |
-| `codesight_call_graph` | Function call relationships |
-| `codesight_generate_idea_structure` | Get project data for generating the idea layer |
-| `codesight_set_idea_layer` | Push an idea structure to the VS Code graph |
-| `codesight_chat_respond` | Read a pending chat question from the graph UI |
-| `codesight_chat_send_response` | Send an answer back to the chat panel |
+| `codesight_explore` | Navigate the code structure — project overview, module details, file symbols, or symbol callers/callees |
+| `codesight_impact` | What breaks if you change a file or symbol — direct and transitive dependents with risk levels |
+| `codesight_trace` | Find the call path between two functions |
+| `codesight_search` | Search for functions, classes, or types by name across the project |
+| `codesight_idea_layer` | Generate or push a conceptual idea layer overlay to the VS Code graph |
 | `codesight_refresh` | Re-run analysis to pick up file changes |
 
-### Example
+### Example prompts
 
 ```
-> What modules does this project have?
+> Explore the src module
 > What would break if I change src/auth/service.ts?
+> Trace the call path from handleRequest to saveToDatabase
+> Search for all classes in the project
 > Generate the idea layer for this project
 ```
+
+You don't need to name the tools — just ask naturally and Claude will use the right one.
 
 ---
 
 ## CLI
 
-Export analysis as JSON for CI or scripting:
+Export analysis as JSON for CI or scripting (no VS Code required):
 
 ```bash
 node analyze.mjs /path/to/project --json > analysis.json
@@ -195,7 +193,7 @@ npm run build         # Build extension
 npm run watch         # Watch mode for extension
 ```
 
-**Extension Development Host** (for debugging):
+**Debug the extension:**
 
 1. Open the `vscode/` folder in VS Code
 2. Press **F5** — launches a new VS Code window with the extension loaded
