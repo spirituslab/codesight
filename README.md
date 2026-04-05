@@ -33,11 +33,11 @@ The graph appears with your project's structure.
 
 ## The Graph
 
-The graph has **4 drill-down levels**, just like a file explorer:
+The graph works like a file explorer — click to drill in, breadcrumbs to go back:
 
-**Directories** → **Folders** → **Files** → **Symbols**
+**Directories** → **Folders** (as deep as your project goes) → **Files** → **Symbols**
 
-Click any node to drill in. Each level shows import relationships and call edges between items.
+Each level shows import relationships and call edges between items. Deeply nested projects work fine — folder drill-down is recursive.
 
 ### Node Shapes
 
