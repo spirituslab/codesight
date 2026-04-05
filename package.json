@@ -9,14 +9,11 @@
   },
   "scripts": {
     "analyze": "node analyze.mjs",
-    "serve": "node serve.mjs",
-    "start": "./start.sh",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "files": [
     "analyze.mjs",
-    "serve.mjs",
     "src/",
     "web/"
   ],

@@ -154,25 +154,21 @@ To use on **another project**, add to that project's `.mcp.json`:
 
 ---
 
-## CLI + Browser
+## CLI
 
-For quick analysis without VS Code:
+Export analysis as JSON for CI or scripting:
 
 ```bash
-node analyze.mjs /path/to/project --serve          # Analyze and open in browser
-node analyze.mjs /path/to/project --llm --serve     # With LLM explanations
-node analyze.mjs /path/to/project --out analysis.json  # JSON output only
+node analyze.mjs /path/to/project --json > analysis.json
+node analyze.mjs /path/to/project -o analysis.json
+node analyze.mjs /path/to/project --max-files 1000
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--serve` | Start web server (default port 8080) |
-| `--port <n>` | Custom port |
-| `--out <file>` | Write analysis JSON to file |
-| `--llm` | Enable LLM explanations |
-| `--llm-provider` | `claude` or `openai` (default: claude) |
-| `--llm-model` | Model name |
-| `--llm-api-key` | API key (or use `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` env var) |
+| `--json` | Output raw JSON to stdout |
+| `-o, --output <file>` | Write analysis JSON to a file |
+| `--max-files N` | Maximum files to analyze (default: 5000) |
 
 ---
 

@@ -2,7 +2,7 @@
   "name": "codesight",
   "displayName": "Codesight",
   "description": "Interactive code structure visualization via static analysis",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "codesight",
   "engines": {
     "vscode": "^1.90.0"

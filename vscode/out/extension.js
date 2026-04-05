@@ -39,83 +39,15 @@ function getModuleName(filePath, projectRoot) {
 function getModuleFromRelPath(relPath) {
   const parts = relPath.split("/");
   if (parts.length <= 1) return "root";
-  let start = 0;
-  while (start < parts.length - 1 && SKIP_DIRS.has(parts[start])) {
-    start++;
-  }
-  if (start >= parts.length - 1) return "root";
-  const firstDir = parts[start];
-  if (MONOREPO_DIRS.has(firstDir) && start + 1 < parts.length - 1) {
-    return `${firstDir}/${parts[start + 1]}`;
-  }
-  return firstDir;
+  return parts[0];
 }
-function refineModuleGrouping(moduleMap, projectRoot) {
-  const refined = /* @__PURE__ */ new Map();
-  for (const [moduleName, data] of moduleMap) {
-    if (moduleName === "root" || data.files.length <= SPLIT_THRESHOLD) {
-      refined.set(moduleName, data);
-      continue;
-    }
-    const subdirCounts = /* @__PURE__ */ new Map();
-    for (const file of data.files) {
-      const rel = file.path;
-      const parts = rel.split("/");
-      let moduleDepth = 0;
-      const skipParts = rel.split("/");
-      for (const p of skipParts) {
-        if (SKIP_DIRS.has(p)) {
-          moduleDepth++;
-          continue;
-        }
-        moduleDepth++;
-        break;
-      }
-      if (moduleDepth < parts.length - 1) {
-        const subdir = parts[moduleDepth];
-        subdirCounts.set(subdir, (subdirCounts.get(subdir) || 0) + 1);
-      }
-    }
-    if (subdirCounts.size >= 2) {
-      for (const file of data.files) {
-        const rel = file.path;
-        const parts = rel.split("/");
-        let moduleDepth = 0;
-        for (const p of parts) {
-          if (SKIP_DIRS.has(p)) {
-            moduleDepth++;
-            continue;
-          }
-          moduleDepth++;
-          break;
-        }
-        let subModuleName;
-        if (moduleDepth < parts.length - 1) {
-          subModuleName = `${moduleName}/${parts[moduleDepth]}`;
-        } else {
-          subModuleName = moduleName;
-        }
-        if (!refined.has(subModuleName)) {
-          refined.set(subModuleName, { files: [], lineCount: 0, languages: /* @__PURE__ */ new Set() });
-        }
-        const mod = refined.get(subModuleName);
-        mod.files.push(file);
-        mod.lineCount += file.lineCount;
-        mod.languages.add(file.language);
-      }
-    } else {
-      refined.set(moduleName, data);
-    }
-  }
-  return refined;
+function refineModuleGrouping(moduleMap, _projectRoot) {
+  return moduleMap;
 }
-var import_path2, SKIP_DIRS, MONOREPO_DIRS, SPLIT_THRESHOLD;
+var import_path2;
 var init_modules = __esm({
   "../src/analyzer/modules.mjs"() {
     import_path2 = require("path");
-    SKIP_DIRS = /* @__PURE__ */ new Set(["src", "lib", "app", "source"]);
-    MONOREPO_DIRS = /* @__PURE__ */ new Set(["packages", "apps", "services", "libs", "modules"]);
-    SPLIT_THRESHOLD = 15;
   }
 });
 
@@ -3591,6 +3523,7 @@ var DEFAULT_IGNORE = /* @__PURE__ */ new Set([
   "target",
   "dist",
   "build",
+  "out",
   ".next",
   ".cache",
   "vendor",
@@ -4159,9 +4092,17 @@ async function analyze(projectRoot, options = {}) {
     }
   }
   for (const file of allFileInfos) {
+    for (const imp of file.imports) {
+      if (imp.resolvedPath && imp.resolvedModule !== "external") {
+        imp.resolvedModule = fileToModule.get(imp.resolvedPath) || imp.resolvedModule;
+      }
+    }
+  }
+  for (const file of allFileInfos) {
     const srcMod = fileToModule.get(file.path) || "root";
     for (const imp of file.imports) {
-      const targetModule = imp.resolvedModule;
+      if (imp.resolvedModule === "external" || !imp.resolvedPath) continue;
+      const targetModule = fileToModule.get(imp.resolvedPath) || imp.resolvedModule;
       if (targetModule === "external" || targetModule === srcMod) continue;
       const key = `${srcMod}\u2192${targetModule}`;
       edgeMap.set(key, (edgeMap.get(key) || 0) + 1);

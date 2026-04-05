@@ -1,6 +1,7 @@
 node_modules/
 web/data.js
-.server.pid
 .env
 .codesight-cache.json
 .superpowers/
+vscode/out/
+vscode/web/

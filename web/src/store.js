@@ -13,7 +13,6 @@ class Store extends EventTarget {
       sidebarTab: 'explorer',
       chatOpen: false,
       sidebarCollapsed: false,
-      activeGroup: null,     // { name, modules: [...] } when viewing a module group
       activeTour: null,
       activeTourStep: 0,
       activeIdeaNode: null,

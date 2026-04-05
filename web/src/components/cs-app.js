@@ -131,12 +131,6 @@ export class CsApp extends LitElement {
       window.addEventListener('message', this._messageHandler);
       // Signal readiness to the extension host
       window.__CODESIGHT_VSCODE__?.postMessage({ type: 'ready' });
-    } else {
-      // Standalone mode — load from data.js
-      store.set('DATA', window.CODEBASE_DATA);
-      if (!window.CODEBASE_DATA) {
-        this.renderRoot.innerHTML = '<div style="padding:40px;color:var(--ctp-red);">Error: data.js failed to load. Run <code>node analyze.mjs</code> first.</div>';
-      }
     }
 
     this._bindKeyboard();

@@ -166,7 +166,6 @@ export class CsGraph extends LitElement {
     this._hasIdeas = false;
     this._mappingRAF = null;
     this._updatingStore = false;
-    this._activeGroup = null; // { name, modules: [] } when drilled into a module group
     this._boundStoreHandler = this._onStoreChanged.bind(this);
   }
 
@@ -299,7 +298,6 @@ export class CsGraph extends LitElement {
   _onNavigate(e) {
     const { action, module, subdir } = e.detail;
     if (action === 'modules') this._renderModuleView();
-    else if (action === 'group') this.navigateToGroup(module);
     else if (action === 'module') this._drillToModule(module);
     else if (action === 'subdir') this._drillToNestedDir(module, subdir);
   }
@@ -313,16 +311,7 @@ export class CsGraph extends LitElement {
     const level = store.state.currentLevel;
 
     if (level === 'modules') {
-      if (nodeType === 'group') {
-        this._activeGroup = node.data('info');
-        store.set('activeGroup', this._activeGroup);
-        this._renderGroupDrillDown();
-      } else if (nodeType === 'file') {
-        // Loose file in group view — drill to symbols
-        this._drillToSymbols(id);
-      } else {
-        this._drillToModule(id);
-      }
+      this._drillToModule(id);
     } else if (level === 'subdirs') {
       if (nodeType === 'file') {
         // Loose file at this level — drill to symbols
@@ -401,15 +390,35 @@ export class CsGraph extends LitElement {
         {
           selector: 'node[nodeType="subdir"]',
           style: {
-            'shape': 'round-rectangle',
+            'shape': 'barrel',
             'border-width': 2, 'border-opacity': 0.7,
           }
         },
         {
           selector: 'node[nodeType="file"]',
           style: {
-            'shape': 'ellipse',
+            'shape': 'cut-rectangle',
           }
+        },
+        {
+          selector: 'node[symbolKind="function"], node[symbolKind="method"]',
+          style: { 'shape': 'round-rectangle' }
+        },
+        {
+          selector: 'node[symbolKind="class"], node[symbolKind="struct"]',
+          style: { 'shape': 'hexagon' }
+        },
+        {
+          selector: 'node[symbolKind="interface"], node[symbolKind="trait"], node[symbolKind="type"]',
+          style: { 'shape': 'diamond' }
+        },
+        {
+          selector: 'node[symbolKind="enum"]',
+          style: { 'shape': 'octagon' }
+        },
+        {
+          selector: 'node[symbolKind="const"]',
+          style: { 'shape': 'tag' }
         },
         { selector: 'node.dimmed', style: { 'opacity': 0.15 } },
         {
@@ -475,16 +484,10 @@ export class CsGraph extends LitElement {
       if (!chat) return;
 
       if (level === 'modules') {
-        // Module or group node — use the info object which has module data
         if (info) {
           const name = info.name || node.data('id');
           const mod = store.state.DATA?.modules?.find(m => m.name === name);
-          if (mod) {
-            chat.setCodeContext('module', mod);
-          } else if (info.modules) {
-            // It's a group — use first module as context
-            chat.setCodeContext('module', { name: node.data('id'), files: info.modules?.flatMap(m => m.files || []) || [], description: `Module group with ${info.modules?.length || 0} modules` });
-          }
+          if (mod) chat.setCodeContext('module', mod);
         }
       } else if (level === 'files' && info) {
         chat.setCodeContext('file', info);
@@ -711,76 +714,42 @@ export class CsGraph extends LitElement {
     return allModules;
   }
 
-  _groupModules(allModules) {
-    const groups = new Map();
-    for (const mod of allModules) {
-      const slash = mod.name.indexOf('/');
-      const parent = slash !== -1 ? mod.name.substring(0, slash) : null;
-      if (parent) {
-        if (!groups.has(parent)) groups.set(parent, { name: parent, standalone: null, modules: [], fileCount: 0, lineCount: 0 });
-        const g = groups.get(parent);
-        g.modules.push(mod);
-        g.fileCount += mod.fileCount;
-        g.lineCount += mod.lineCount;
-      } else {
-        if (!groups.has(mod.name)) groups.set(mod.name, { name: mod.name, standalone: null, modules: [], fileCount: 0, lineCount: 0 });
-        const g = groups.get(mod.name);
-        g.standalone = mod;
-        g.fileCount += mod.fileCount;
-        g.lineCount += mod.lineCount;
-      }
-    }
-    return groups;
-  }
-
   _renderModuleView() {
-    this._activeGroup = null;
     this._setStoreState({
       currentLevel: 'modules',
       currentModule: null,
       currentSubdir: null,
       currentFile: null,
-      activeGroup: null,
     });
 
     const allModules = this._getAllModules();
-    const groups = this._groupModules(allModules);
     const elements = [];
 
-    // Map module names to their group name (for edge aggregation)
-    const modToGroup = new Map();
-    for (const [groupName, g] of groups) {
-      if (g.standalone) modToGroup.set(g.standalone.name, groupName);
-      for (const sub of g.modules) modToGroup.set(sub.name, groupName);
-    }
-
-    // Build nodes from groups
-    for (const [groupName, g] of groups) {
-      const isGroup = g.modules.length > 0;
-      const w = Math.max(40, Math.min(110, 15 * Math.log2(g.lineCount + 1)));
-      const color = getColor(groupName);
+    // Build one node per module (directory)
+    for (const mod of allModules) {
+      const w = Math.max(40, Math.min(110, 15 * Math.log2(mod.lineCount + 1)));
+      const color = getColor(mod.name);
       elements.push({
         data: {
-          id: groupName,
-          label: isGroup ? groupName + '/' : groupName,
+          id: mod.name,
+          label: mod.name,
           color,
           borderColor: shadeColor(color, -40),
           size: w, sizeH: w * 0.65,
-          nodeType: isGroup ? 'group' : 'module',
-          info: g,
+          nodeType: 'module',
+          info: mod,
         },
       });
     }
 
-    // Aggregate edges between groups (arrows point toward the importer)
+    // Edges between modules (arrows point toward the importer)
+    const moduleNames = new Set(allModules.map(m => m.name));
     const edgeMap = new Map();
     for (const edge of store.state.DATA.edges) {
-      const srcGroup = modToGroup.get(edge.source);
-      const tgtGroup = modToGroup.get(edge.target);
-      if (!srcGroup || !tgtGroup || srcGroup === tgtGroup) continue;
+      if (!moduleNames.has(edge.source) || !moduleNames.has(edge.target)) continue;
       // edge.source is the importer, edge.target is the imported
       // Arrow: imported → importer (dependency flows toward consumer)
-      const key = `${tgtGroup}->${srcGroup}`;
+      const key = `${edge.target}->${edge.source}`;
       edgeMap.set(key, (edgeMap.get(key) || 0) + edge.weight);
     }
     for (const [key, weight] of edgeMap) {
@@ -806,128 +775,7 @@ export class CsGraph extends LitElement {
     }).run();
     this._cyCode.fit(undefined, 50);
 
-    this._renderLegend([...groups.values()].map(g => ({ name: g.name, lineCount: g.lineCount })));
-    this._updateLevelBadge();
-    setTimeout(() => { this._updateMinimap(); this._drawMappingLines(); }, 500);
-  }
-
-  _renderGroupDrillDown() {
-    const group = this._activeGroup;
-    if (!group) return;
-
-    const subModules = [...group.modules];
-    // Don't add standalone as a sub-module — render its files directly
-    const standaloneFiles = group.standalone ? group.standalone.files : [];
-
-    const elements = [];
-    for (const mod of subModules) {
-      const w = Math.max(35, Math.min(90, 14 * Math.log2(mod.lineCount + 1)));
-      const color = getColor(mod.name);
-      const label = mod.name.includes('/') ? mod.name.split('/').slice(1).join('/') : mod.name;
-      elements.push({
-        data: {
-          id: mod.name, label, color,
-          borderColor: shadeColor(color, -40),
-          size: w, sizeH: w * 0.65,
-          nodeType: 'module', info: mod,
-        },
-      });
-    }
-
-    // Render standalone loose files as individual file nodes
-    const groupColor = getColor(group.name);
-    for (const f of standaloneFiles) {
-      const w = Math.max(28, Math.min(65, 8 * Math.log2(f.lineCount + 1)));
-      const label = f.name.replace(/\.[^.]+$/, '');
-      elements.push({
-        data: {
-          id: f.path, label, color: groupColor,
-          borderColor: shadeColor(groupColor, -30),
-          size: w, sizeH: w * 0.6,
-          nodeType: 'file', info: f,
-        },
-      });
-    }
-
-    // Edges between sub-modules (from module-level edges)
-    const subSet = new Set(subModules.map(m => m.name));
-    for (const edge of store.state.DATA.edges) {
-      if (!subSet.has(edge.source) || !subSet.has(edge.target)) continue;
-      elements.push({
-        data: {
-          id: `e:${edge.target}\0${edge.source}`,
-          source: edge.target, target: edge.source,
-          width: Math.max(0.5, Math.min(6, Math.log2(edge.weight + 1))),
-          rawWeight: edge.weight,
-          edgeColor: getColor(edge.target),
-        },
-      });
-    }
-
-    // Edges involving standalone files (from import data)
-    if (standaloneFiles.length > 0) {
-      const standalonePathSet = new Set(standaloneFiles.map(f => f.path));
-      // Map file paths to their sub-module name for quick lookup
-      const fileToSubModule = new Map();
-      for (const mod of subModules) {
-        for (const f of mod.files) fileToSubModule.set(f.path, mod.name);
-      }
-      const edgeMap = new Map();
-
-      // Standalone files importing from sub-modules or other standalone files
-      for (const f of standaloneFiles) {
-        for (const imp of f.imports) {
-          if (imp.resolvedModule === 'external' || !imp.resolvedPath) continue;
-          const targetMod = fileToSubModule.get(imp.resolvedPath);
-          if (targetMod) {
-            const key = `${targetMod}\0${f.path}`;
-            if (!edgeMap.has(key)) edgeMap.set(key, { source: targetMod, target: f.path, weight: 0 });
-            edgeMap.get(key).weight++;
-          } else if (standalonePathSet.has(imp.resolvedPath) && imp.resolvedPath !== f.path) {
-            const key = `${imp.resolvedPath}\0${f.path}`;
-            if (!edgeMap.has(key)) edgeMap.set(key, { source: imp.resolvedPath, target: f.path, weight: 0 });
-            edgeMap.get(key).weight++;
-          }
-        }
-      }
-
-      // Sub-module files importing standalone files
-      for (const mod of subModules) {
-        for (const f of mod.files) {
-          for (const imp of f.imports) {
-            if (imp.resolvedModule === 'external' || !imp.resolvedPath) continue;
-            if (standalonePathSet.has(imp.resolvedPath)) {
-              const key = `${imp.resolvedPath}\0${mod.name}`;
-              if (!edgeMap.has(key)) edgeMap.set(key, { source: imp.resolvedPath, target: mod.name, weight: 0 });
-              edgeMap.get(key).weight++;
-            }
-          }
-        }
-      }
-
-      for (const [key, { source, target, weight }] of edgeMap) {
-        elements.push({
-          data: {
-            id: `e:${key}`, source, target,
-            width: Math.max(0.5, Math.min(4, Math.log2(weight + 1))),
-            rawWeight: weight, edgeColor: groupColor,
-          },
-        });
-      }
-    }
-
-    this._cyCode.elements().remove();
-    this._cyCode.add(elements);
-    this._cyCode.layout({
-      name: 'cose', animate: true, animationDuration: 400,
-      nodeDimensionsIncludeLabels: true,
-      idealEdgeLength: () => 150, nodeRepulsion: () => 10000,
-      edgeElasticity: () => 80, gravity: 0.3, numIter: 800,
-      padding: 40, randomize: true, componentSpacing: 80, nodeOverlap: 15,
-    }).run();
-    this._cyCode.fit(undefined, 40);
-
-    this._renderLegend(subModules);
+    this._renderLegend(allModules);
     this._updateLevelBadge();
     setTimeout(() => { this._updateMinimap(); this._drawMappingLines(); }, 500);
   }
@@ -1224,6 +1072,7 @@ export class CsGraph extends LitElement {
           borderColor: shadeColor(symColor, -30),
           size: 36, sizeH: 26,
           nodeType: 'export', info: exported[i],
+          symbolKind: exported[i].kind,
         },
         position: {
           x: centerX + radius * Math.cos(angle),
@@ -1676,30 +1525,8 @@ export class CsGraph extends LitElement {
     return true;
   }
 
-  /** Navigate to a module group's drill-down view by group name. */
-  navigateToGroup(groupName) {
-    const allModules = this._getAllModules();
-    const groups = this._groupModules(allModules);
-    const group = groups.get(groupName);
-    if (!group || group.modules.length === 0) return;
-    // Ensure we're at modules level
-    this._setStoreState({
-      currentLevel: 'modules',
-      currentModule: null,
-      currentSubdir: null,
-      currentFile: null,
-    });
-    this._activeGroup = group;
-    this._setStoreSingle('activeGroup', group);
-    this._renderGroupDrillDown();
-  }
-
-  /** Go back from group drill-down to grouped overview. Returns true if handled. */
+  /** Go back — no-op at module level, handled by breadcrumb navigation. */
   goBack() {
-    if (this._activeGroup) {
-      this._renderModuleView(); // clears _activeGroup and re-renders grouped view
-      return true;
-    }
     return false;
   }
 

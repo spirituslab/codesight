@@ -219,23 +219,17 @@ export class CsChat extends LitElement {
       focusedNode: this._focusedNode || null,
     };
 
-    if (window.__CODESIGHT_WEBVIEW__) {
-      // VS Code webview mode — route through extension
-      const assistantMsg = { role: 'pending', text: 'Waiting for response...' };
-      this._messages = [...this._messages, assistantMsg];
-      this._scrollToBottom();
+    const assistantMsg = { role: 'pending', text: 'Waiting for response...' };
+    this._messages = [...this._messages, assistantMsg];
+    this._scrollToBottom();
 
-      window.__CODESIGHT_VSCODE__.postMessage({
-        type: 'chatRequest',
-        message,
-        context,
-        history: this._history.slice(-10),
-      });
-      // Response comes back via 'chatResponse' message handler
-    } else {
-      // Standalone mode — use /api/chat endpoint (SSE)
-      await this._sendViaApi(message, context);
-    }
+    window.__CODESIGHT_VSCODE__.postMessage({
+      type: 'chatRequest',
+      message,
+      context,
+      history: this._history.slice(-10),
+    });
+    // Response comes back via 'chatResponse' message handler
   }
 
   _handleChatResponse(msg) {
@@ -251,59 +245,6 @@ export class CsChat extends LitElement {
     }
     this._sending = false;
     this._scrollToBottom();
-  }
-
-  async _sendViaApi(message, context) {
-    const assistantMsg = { role: 'assistant', text: '' };
-    this._messages = [...this._messages, assistantMsg];
-
-    try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, context, history: this._history.slice(-10) }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'Server error' }));
-        assistantMsg.text = err.error || 'Failed to get response';
-        assistantMsg.role = 'error';
-        this._messages = [...this._messages];
-        return;
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (data.text) {
-              assistantMsg.text += data.text;
-              this._messages = [...this._messages];
-              this._scrollToBottom();
-            }
-          } catch {}
-        }
-      }
-
-      this._history.push({ role: 'user', content: message });
-      this._history.push({ role: 'assistant', content: assistantMsg.text });
-    } catch (err) {
-      assistantMsg.text = 'Connection error: ' + err.message;
-      assistantMsg.role = 'error';
-      this._messages = [...this._messages];
-    } finally {
-      this._sending = false;
-    }
   }
 
   _scrollToBottom() {

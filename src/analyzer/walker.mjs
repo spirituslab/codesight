@@ -3,7 +3,7 @@ import { join, relative } from "path";
 
 const DEFAULT_IGNORE = new Set([
   "node_modules", ".git", "__pycache__", ".venv", "venv",
-  "target", "dist", "build", ".next", ".cache", "vendor",
+  "target", "dist", "build", "out", ".next", ".cache", "vendor",
   "coverage", ".mypy_cache", ".pytest_cache", "env", ".tox",
   ".eggs", ".cargo", ".gradle", "bin", "obj", ".idea",
   ".vscode", ".DS_Store",

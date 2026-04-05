@@ -51,7 +51,6 @@ export class CsBreadcrumb extends LitElement {
     _module: { state: true },
     _subdir: { state: true },
     _file: { state: true },
-    _activeGroup: { state: true },
   };
 
   constructor() {
@@ -76,7 +75,6 @@ export class CsBreadcrumb extends LitElement {
     this._module = store.state.currentModule;
     this._subdir = store.state.currentSubdir;
     this._file = store.state.currentFile;
-    this._activeGroup = store.state.activeGroup;
   }
 
   _nav(action, module, subdir) {
@@ -102,31 +100,27 @@ export class CsBreadcrumb extends LitElement {
       } else {
         this._nav('modules');
       }
-    } else if (this._level === 'modules' && this._activeGroup) {
-      this._nav('modules');
     }
   }
 
   render() {
     const projName = store.state.DATA?.projectName || 'Project';
     const parts = [];
-    const canGoBack = this._level !== 'modules' || this._activeGroup;
+    const canGoBack = this._level !== 'modules';
 
-    if (this._level === 'modules' && this._activeGroup) {
-      // Inside a module group drill-down
-      parts.push(html`<span @click=${() => this._nav('modules')}>${projName}</span>`);
-      parts.push(html`<span class="sep">/</span>`);
-      parts.push(html`<span class="active">${this._activeGroup.name}/</span>`);
-    } else if (this._level === 'modules') {
+    if (this._level === 'modules') {
       parts.push(html`<span class="active">${projName}</span>`);
     } else {
       parts.push(html`<span @click=${() => this._nav('modules')}>${projName}</span>`);
-      parts.push(html`<span class="sep">/</span>`);
 
-      if (this._level === 'subdirs' && !this._subdir) {
-        parts.push(html`<span class="active">${this._module}</span>`);
-      } else {
-        parts.push(html`<span @click=${() => this._nav('module', this._module)}>${this._module}</span>`);
+      if (this._module) {
+        parts.push(html`<span class="sep">/</span>`);
+        const isModuleEnd = (this._level === 'subdirs' || this._level === 'files') && !this._subdir;
+        if (isModuleEnd) {
+          parts.push(html`<span class="active">${this._module}</span>`);
+        } else {
+          parts.push(html`<span @click=${() => this._nav('module', this._module)}>${this._module}</span>`);
+        }
       }
 
       if (this._subdir) {

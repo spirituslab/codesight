@@ -321,11 +321,22 @@ export async function analyze(projectRoot, options = {}) {
     }
   }
 
+  // Update resolvedModule on imports to use refined module names
+  for (const file of allFileInfos) {
+    for (const imp of file.imports) {
+      if (imp.resolvedPath && imp.resolvedModule !== "external") {
+        imp.resolvedModule = fileToModule.get(imp.resolvedPath) || imp.resolvedModule;
+      }
+    }
+  }
+
   for (const file of allFileInfos) {
     const srcMod = fileToModule.get(file.path) || "root";
 
     for (const imp of file.imports) {
-      const targetModule = imp.resolvedModule;
+      if (imp.resolvedModule === "external" || !imp.resolvedPath) continue;
+      // Use refined module map to get the target module name
+      const targetModule = fileToModule.get(imp.resolvedPath) || imp.resolvedModule;
       if (targetModule === "external" || targetModule === srcMod) continue;
       const key = `${srcMod}→${targetModule}`;
       edgeMap.set(key, (edgeMap.get(key) || 0) + 1);
