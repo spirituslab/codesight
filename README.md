@@ -112,7 +112,15 @@ Codesight exposes structural intelligence as MCP tools for [Claude Code](https:/
 
 ### Setup
 
-Add this to your project's `.mcp.json` (create the file in your project root if it doesn't exist):
+Run this from the codesight directory to register MCP in any project:
+
+```bash
+node analyze.mjs init ~/path/to/your/project
+```
+
+This creates a `.mcp.json` in that project with the correct path to codesight's MCP server. Then start Claude Code in that project — the tools are available immediately.
+
+You can also create `.mcp.json` manually:
 
 ```json
 {
@@ -124,8 +132,6 @@ Add this to your project's `.mcp.json` (create the file in your project root if 
   }
 }
 ```
-
-Replace `/path/to/codesight` with wherever you cloned the repo. Then start Claude Code in your project — the tools are available immediately.
 
 ### Tools
 

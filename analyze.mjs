@@ -7,8 +7,62 @@ import { analyze } from "./src/analyzer/index.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Arg parsing
+// ─── Init subcommand ──────────────────────────────────────────
 const args = process.argv.slice(2);
+
+if (args[0] === "init") {
+  const targetDir = resolve(args[1] || ".");
+  const mcpJsonPath = resolve(targetDir, ".mcp.json");
+  const mcpServerPath = resolve(__dirname, "mcp-server.mjs");
+
+  // Verify target directory exists
+  try {
+    const { stat: fsStat } = await import("fs/promises");
+    const s = await fsStat(targetDir);
+    if (!s.isDirectory()) {
+      console.error(`Error: "${targetDir}" is not a directory`);
+      process.exit(2);
+    }
+  } catch {
+    console.error(`Error: "${targetDir}" does not exist`);
+    process.exit(2);
+  }
+
+  // Check if .mcp.json already exists and has codesight
+  try {
+    const { readFile } = await import("fs/promises");
+    const existing = JSON.parse(await readFile(mcpJsonPath, "utf-8"));
+    if (existing.mcpServers?.codesight) {
+      console.log("Codesight MCP is already registered in .mcp.json");
+      process.exit(0);
+    }
+    // Merge into existing config
+    existing.mcpServers = existing.mcpServers || {};
+    existing.mcpServers.codesight = {
+      command: "node",
+      args: [mcpServerPath, "."],
+    };
+    await writeFile(mcpJsonPath, JSON.stringify(existing, null, 2) + "\n");
+    console.log(`Added codesight to existing .mcp.json`);
+  } catch {
+    // No existing .mcp.json — create new
+    const config = {
+      mcpServers: {
+        codesight: {
+          command: "node",
+          args: [mcpServerPath, "."],
+        },
+      },
+    };
+    await writeFile(mcpJsonPath, JSON.stringify(config, null, 2) + "\n");
+    console.log(`Created .mcp.json with codesight MCP`);
+  }
+  console.log(`MCP server: ${mcpServerPath}`);
+  console.log(`\nStart Claude Code in ${targetDir} and the codesight tools will be available.`);
+  process.exit(0);
+}
+
+// ─── Arg parsing ──────────────────────────────────────────────
 let projectPath = ".";
 let outputPath = null;
 let jsonOutput = false;
@@ -31,7 +85,10 @@ codesight — Universal code structure visualization
 
 Usage:
   codesight [path] [options]
-  npx codesight [path] [options]
+  codesight init [path]
+
+Commands:
+  init [path]         Register codesight MCP in a project for Claude Code
 
 Arguments:
   path                Project root to analyze (default: current directory)
@@ -44,9 +101,9 @@ Options:
 
 Examples:
   codesight .                           Analyze current directory
+  codesight init ~/myproject            Register MCP for Claude Code
   codesight . --json > analysis.json    Export raw JSON for CI
   codesight . -o analysis.json          Write JSON to file
-  codesight . --max-files 1000          Limit to 1000 files
 `);
     process.exit(0);
   } else if (args[i].startsWith("-")) {
