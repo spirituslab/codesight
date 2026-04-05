@@ -4,6 +4,7 @@ import { theme } from '../theme.js';
 import { store } from '../store.js';
 import { getColor, getSymbolColor } from '../utils/colors.js';
 import { escHtml } from '../utils/helpers.js';
+import { icons } from '../icons.js';
 
 export class CsExplorer extends LitElement {
   static styles = [theme, css`
@@ -91,9 +92,14 @@ export class CsExplorer extends LitElement {
 
     /* File/folder icons */
     .icon-folder, .icon-file {
-      margin-right: 4px;
-      font-size: var(--font-size-sm);
+      display: inline-flex;
+      align-items: center;
+      margin-right: 5px;
+      vertical-align: middle;
+      color: var(--text-muted);
     }
+    .icon-folder { color: var(--ctp-peach, #fab387); }
+    .icon-file { color: var(--ctp-blue, #89b4fa); }
 
     /* Color dot */
     .dot {
@@ -651,13 +657,13 @@ export class CsExplorer extends LitElement {
       <ul class="file-list">
         ${folders.map(sub => html`
           <li @click=${() => this._onFolderClick(mod, sub)}>
-            <span><span class="icon-folder">&#128193;</span> ${sub.name}/</span>
+            <span><span class="icon-folder">${icons.folder}</span> ${sub.name}/</span>
             <span class="lines">${sub.fileCount} files, ${(sub.lineCount / 1000).toFixed(1)}k lines</span>
           </li>
         `)}
         ${files.map(item => html`
           <li @click=${() => this._onFileClick(item.file.path)}>
-            <span><span class="icon-file">&#128196;</span> ${item.name}</span>
+            <span><span class="icon-file">${icons.file}</span> ${item.name}</span>
             <span class="lines">${item.file.lineCount} lines</span>
           </li>
         `)}

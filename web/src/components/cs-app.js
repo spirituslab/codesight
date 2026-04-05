@@ -8,6 +8,7 @@ import './cs-status-bar.js';
 import './cs-breadcrumb.js';
 import './cs-graph.js';
 import './cs-sidebar.js';
+import './cs-chat.js';
 import './cs-global-search.js';
 import './cs-code-popup.js';
 import '../panels/cs-explorer.js';
@@ -60,21 +61,32 @@ export class CsApp extends LitElement {
       flex: 1;
       min-height: 0;
     }
+    .chat-panel {
+      width: 320px;
+      border-left: 1px solid var(--border);
+      display: none;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+    .chat-panel.open { display: flex; }
   `];
 
   static properties = {
     _sidebarCollapsed: { state: true },
+    _chatOpen: { state: true },
   };
 
   constructor() {
     super();
     this._sidebarCollapsed = false;
+    this._chatOpen = false;
     this._boundStoreHandler = this._onStoreChanged.bind(this);
     this._docListeners = [];
   }
 
   _onStoreChanged() {
     this._sidebarCollapsed = store.state.sidebarCollapsed;
+    this._chatOpen = store.state.chatOpen;
   }
 
   _addDocListener(event, handler) {
@@ -139,6 +151,11 @@ export class CsApp extends LitElement {
         e.preventDefault();
         store.set('sidebarCollapsed', !store.state.sidebarCollapsed);
       }
+      // Ctrl+/ → toggle chat panel
+      if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+        e.preventDefault();
+        store.set('chatOpen', !store.state.chatOpen);
+      }
       // Ctrl+K → global search
       if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
@@ -158,13 +175,18 @@ export class CsApp extends LitElement {
       gs.close();
       return;
     }
-    // Layer 2: close code popup if open
+    // Layer 2: close chat if open
+    if (store.state.chatOpen) {
+      store.set('chatOpen', false);
+      return;
+    }
+    // Layer 3: close code popup if open
     const cp = this._codePopup;
     if (cp?.classList.contains('open')) {
       cp.close();
       return;
     }
-    // Layer 3: navigate back one level in the graph
+    // Layer 4: navigate back one level in the graph
     this._goBack();
   }
 
@@ -321,6 +343,9 @@ export class CsApp extends LitElement {
         </div>
         <div class="graph-area">
           <slot name="graph"></slot>
+        </div>
+        <div class="chat-panel ${this._chatOpen ? 'open' : ''}">
+          <slot name="chat"></slot>
         </div>
       </div>
       <cs-status-bar></cs-status-bar>

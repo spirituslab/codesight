@@ -11,6 +11,7 @@ class Store extends EventTarget {
       currentSubdir: null,
       currentFile: null,
       sidebarTab: 'explorer',
+      chatOpen: false,
       sidebarCollapsed: false,
       activeTour: null,
       activeTourStep: 0,

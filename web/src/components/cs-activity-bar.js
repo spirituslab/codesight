@@ -35,16 +35,23 @@ export class CsActivityBar extends LitElement {
 
   static properties = {
     activeTab: { type: String },
+    _chatOpen: { state: true },
   };
 
   constructor() {
     super();
     this.activeTab = 'explorer';
+    this._chatOpen = false;
     this._boundStoreHandler = this._onStoreChanged.bind(this);
   }
 
   _onStoreChanged() {
     this.activeTab = store.state.sidebarTab;
+    this._chatOpen = store.state.chatOpen;
+  }
+
+  _toggleChat() {
+    store.set('chatOpen', !store.state.chatOpen);
   }
 
   connectedCallback() {
@@ -74,7 +81,7 @@ export class CsActivityBar extends LitElement {
         <button class=${this.activeTab === 'tours' ? 'active' : ''} @click=${() => this._setTab('tours')} title="Tours">${icons.tour}</button>
       </div>
       <div class="bottom">
-        <button title="Settings">${icons.settings}</button>
+        <button class=${this._chatOpen ? 'active' : ''} @click=${this._toggleChat} title="Toggle Chat (Ctrl+/)">${icons.chat}</button>
       </div>
     `;
   }
