@@ -95,6 +95,8 @@ You need either GitHub Copilot or Claude Code. Pick whichever you have:
 > Generate the idea layer for this project
 ```
 
+> **Note for large projects:** After Claude Code generates the idea layer, run `Ctrl+Shift+P` → **Codesight: Refresh Analysis** to have it display in the graph. The file watcher may not pick up the change automatically on larger codebases.
+
 ### Using the idea layer
 
 | Action | What it does |
