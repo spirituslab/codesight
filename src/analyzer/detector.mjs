@@ -15,6 +15,9 @@ const EXTENSION_MAP = {
   ".hh":   "cpp",
   ".hxx":  "cpp",
   ".java": "java",
+  ".cs":   "csharp",
+  ".go":   "go",
+  ".rs":   "rust",
 };
 
 export function detectLanguage(filePath) {

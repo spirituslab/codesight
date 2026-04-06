@@ -350,6 +350,10 @@ export async function analyze(projectRoot, options = {}) {
   }
   edges.sort((a, b) => b.weight - a.weight);
 
+  // 6.5 Detect circular dependencies
+  const { detectCycles } = await import('./cycles.mjs');
+  const circularDeps = detectCycles(edges);
+
   // 7. Build cross-references
   buildCrossReferences(modules, rootFiles);
 
@@ -397,6 +401,10 @@ export async function analyze(projectRoot, options = {}) {
   const impactMap = computeImpact(modules, rootFiles, callGraph);
   const impactedFileCount = Object.keys(impactMap).length;
 
+  // 12. Detect dead code
+  const { detectDeadCode } = await import('./dead-code.mjs');
+  const deadCode = detectDeadCode(modules, rootFiles, callGraph, edges);
+
   const elapsed = Date.now() - startTime;
   console.log(`Done in ${elapsed}ms`);
   console.log(`  ${modules.length} modules, ${rootFiles.length} root files`);
@@ -404,6 +412,12 @@ export async function analyze(projectRoot, options = {}) {
   console.log(`  ${allFileInfos.reduce((s, f) => s + f.symbols.length, 0)} symbols extracted`);
   console.log(`  ${entryPointPaths.size} entry points, ${keyFiles.length} key files`);
   console.log(`  ${impactedFileCount} files with dependents`);
+  if (circularDeps.hasCycles) {
+    console.log(`  ${circularDeps.cycles.length} circular dependency cycle(s) detected`);
+  }
+  if (deadCode.stats.deadSymbolCount > 0) {
+    console.log(`  ${deadCode.stats.deadSymbolCount} potentially dead symbols, ${deadCode.stats.deadFileCount} dead files`);
+  }
   if (warnings.length > 0) {
     console.warn(`  ${warnings.length} warning(s) during analysis`);
   }
@@ -418,6 +432,8 @@ export async function analyze(projectRoot, options = {}) {
     keyFiles,
     callGraph,
     impactMap,
+    circularDeps,
+    deadCode,
     warnings,
   };
 

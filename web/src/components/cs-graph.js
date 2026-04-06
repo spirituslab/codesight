@@ -757,6 +757,17 @@ export class CsGraph extends LitElement {
       });
     }
 
+    // Build set of cycle edges for highlighting
+    const cycleEdgeSet = new Set();
+    const cd = store.state.DATA.circularDeps;
+    if (cd?.hasCycles) {
+      for (const c of cd.cycles) {
+        for (let i = 0; i < c.path.length - 1; i++) {
+          cycleEdgeSet.add(`${c.path[i]}→${c.path[i + 1]}`);
+        }
+      }
+    }
+
     // Edges between modules (arrows point toward the importer)
     const moduleNames = new Set(allModules.map(m => m.name));
     const edgeMap = new Map();
@@ -769,12 +780,14 @@ export class CsGraph extends LitElement {
     }
     for (const [key, weight] of edgeMap) {
       const [src, tgt] = key.split('->');
+      // Check if this edge is part of a cycle (in either direction)
+      const isCycle = cycleEdgeSet.has(`${src}→${tgt}`) || cycleEdgeSet.has(`${tgt}→${src}`);
       elements.push({
         data: {
           id: key, source: src, target: tgt,
-          width: Math.max(0.5, Math.min(6, Math.log2(weight + 1))),
+          width: isCycle ? Math.max(2, Math.min(6, Math.log2(weight + 1))) : Math.max(0.5, Math.min(6, Math.log2(weight + 1))),
           rawWeight: weight,
-          edgeColor: getColor(src),
+          edgeColor: isCycle ? '#f38ba8' : getColor(src),
         },
       });
     }

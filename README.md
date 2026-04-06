@@ -187,6 +187,29 @@ node analyze.mjs /path/to/project --max-files 1000
 | C | Functions, structs, unions, enums, typedefs | #include (local and system) | Full |
 | C++ | Classes, namespaces, templates + all C | #include, using declarations | Full |
 | Java | Classes, interfaces, enums, methods | Package imports, wildcards, static imports | Full |
+| C# | Classes, interfaces, structs, enums, methods, properties | using directives | Full |
+| Go | Functions, methods, structs, interfaces | import declarations | Full |
+| Rust | Functions, structs, enums, traits, impl methods, consts | use declarations | Full |
+
+---
+
+## Analysis Features
+
+### Circular Dependency Detection
+
+Codesight detects circular dependencies between modules (e.g., A imports B, B imports C, C imports A). Cycles are highlighted with red edges in the L1 graph and listed in the explorer sidebar.
+
+### Dead Code Detection
+
+Codesight flags exported symbols that are never imported or called anywhere in the project. Results appear in the explorer sidebar under "Dead Code".
+
+**Caveat:** Dead code detection uses static import and call graph analysis only. It will produce false positives for:
+- **Web components** registered via `customElements.define()` (not imported by name)
+- **Framework entry points** like `activate`/`deactivate` in VS Code extensions (called by the runtime)
+- **Dynamically imported functions** called via `import()` expressions inside conditionals
+- **Public API symbols** exported for external consumers but not used internally
+
+Treat the results as "potentially dead" — a starting point for review, not a definitive list.
 
 ---
 

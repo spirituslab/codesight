@@ -597,6 +597,33 @@ export class CsExplorer extends LitElement {
         `)}
       ` : nothing}
 
+      ${this._data.circularDeps?.hasCycles ? html`
+        <div class="section-title" style="color:var(--ctp-red,#f38ba8)">Circular Dependencies</div>
+        <ul class="file-list">
+          ${this._data.circularDeps.cycles.map(c => html`
+            <li style="font-size:var(--font-size-xs);color:var(--ctp-red,#f38ba8)">
+              <span>${c.path.join(' \u2192 ')}</span>
+              <span class="lines">${c.totalWeight} imports</span>
+            </li>
+          `)}
+        </ul>
+      ` : nothing}
+
+      ${this._data.deadCode?.stats?.deadSymbolCount > 0 ? html`
+        <div class="section-title">Dead Code</div>
+        <div class="desc" style="font-size:var(--font-size-xs);margin-bottom:8px">
+          ${this._data.deadCode.stats.deadSymbolCount} unused symbols${this._data.deadCode.stats.deadFileCount > 0 ? `, ${this._data.deadCode.stats.deadFileCount} dead files` : ''}${this._data.deadCode.deadModules?.length > 0 ? `, ${this._data.deadCode.deadModules.length} isolated modules` : ''}
+        </div>
+        <ul class="file-list">
+          ${(this._data.deadCode.deadSymbols || []).slice(0, 10).map(s => html`
+            <li @click=${() => this._onFileClick(s.file)} style="opacity:0.6">
+              <span><span class="icon-file">${icons.file}</span> ${s.name} <span class="lines">${s.kind}</span></span>
+              <span class="lines">${s.file.split('/').pop()}</span>
+            </li>
+          `)}
+        </ul>
+      ` : nothing}
+
       ${keyFiles.length > 0 ? html`
         <div class="section-title">Key Files (most imported)</div>
         ${keyFiles.map(kf => html`

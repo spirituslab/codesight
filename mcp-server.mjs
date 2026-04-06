@@ -653,7 +653,46 @@ Create 5-15 idea nodes. Only use module names and file paths from the lists abov
   }
 );
 
-// ─── Tool 6: codesight_refresh ──────────────────────────────────
+// ─── Tool 6: codesight_circular_deps ────────────────────────────
+
+server.tool(
+  "codesight_circular_deps",
+  "Find circular dependencies between modules. Returns cycle chains with paths and weights.",
+  {},
+  async () => {
+    const result = await getAnalysis();
+    const cd = result.circularDeps || { cycles: [], hasCycles: false };
+    return jsonResponse({
+      hasCycles: cd.hasCycles,
+      cycleCount: cd.cycles.length,
+      cycles: cd.cycles.map(c => ({
+        path: c.path,
+        totalWeight: c.totalWeight,
+        description: c.path.join(' → '),
+      })),
+    });
+  }
+);
+
+// ─── Tool 7: codesight_dead_code ────────────────────────────────
+
+server.tool(
+  "codesight_dead_code",
+  "Identify potentially dead code — exported symbols never imported or called, unused files, and isolated modules.",
+  {},
+  async () => {
+    const result = await getAnalysis();
+    const dc = result.deadCode || { deadSymbols: [], deadFiles: [], deadModules: [], stats: {} };
+    return jsonResponse({
+      stats: dc.stats,
+      deadSymbols: dc.deadSymbols.slice(0, 50),
+      deadFiles: dc.deadFiles,
+      deadModules: dc.deadModules,
+    });
+  }
+);
+
+// ─── Tool 8: codesight_refresh ──────────────────────────────────
 
 server.tool(
   "codesight_refresh",
