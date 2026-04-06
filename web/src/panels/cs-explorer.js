@@ -412,18 +412,7 @@ export class CsExplorer extends LitElement {
 
   _getAllModules() {
     if (!this._data) return [];
-    const mods = [...this._data.modules];
-    if (this._data.rootFiles?.length > 0) {
-      mods.push({
-        name: 'root',
-        path: '',
-        description: `${this._data.rootFiles.length} files in project root`,
-        fileCount: this._data.rootFiles.length,
-        lineCount: this._data.rootFiles.reduce((s, f) => s + f.lineCount, 0),
-        files: this._data.rootFiles,
-      });
-    }
-    return mods;
+    return [...this._data.modules];
   }
 
   _getAllFilesFlat() {
@@ -431,6 +420,9 @@ export class CsExplorer extends LitElement {
     const files = [];
     for (const m of mods) {
       for (const f of m.files) files.push(f);
+    }
+    if (this._data?.rootFiles) {
+      for (const f of this._data.rootFiles) files.push(f);
     }
     return files;
   }
@@ -547,8 +539,9 @@ export class CsExplorer extends LitElement {
   _renderModuleOverview() {
     const allModules = this._getAllModules();
     const allFiles = this._getAllFilesFlat();
-    const total = allModules.reduce((s, m) => s + m.lineCount, 0);
-    const totalFiles = allModules.reduce((s, m) => s + m.fileCount, 0);
+    const rootFiles = this._data.rootFiles || [];
+    const total = allModules.reduce((s, m) => s + m.lineCount, 0) + rootFiles.reduce((s, f) => s + f.lineCount, 0);
+    const totalFiles = allModules.reduce((s, m) => s + m.fileCount, 0) + rootFiles.length;
     const sortedModules = [...allModules].sort((a, b) => b.lineCount - a.lineCount);
 
     const entryFiles = allFiles.filter(f => f.isEntryPoint);
@@ -581,6 +574,18 @@ export class CsExplorer extends LitElement {
           </li>
         `)}
       </ul>
+
+      ${rootFiles.length > 0 ? html`
+        <div class="section-title">Root Files</div>
+        <ul class="file-list">
+          ${rootFiles.map(f => html`
+            <li @click=${() => this._onFileClick(f.path)}>
+              <span><span class="icon-file">${icons.file}</span> ${f.name}</span>
+              <span class="lines">${f.lineCount} lines</span>
+            </li>
+          `)}
+        </ul>
+      ` : nothing}
 
       ${entryFiles.length > 0 ? html`
         <div class="section-title">Entry Points</div>

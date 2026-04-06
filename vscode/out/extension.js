@@ -4927,7 +4927,6 @@ var path4 = __toESM(require("path"));
 var analyzer = null;
 var webviewManager;
 var fileWatcherDisposable = null;
-var activeTimers = [];
 function getWorkspaceRoot() {
   return vscode6.workspace.workspaceFolders?.[0]?.uri.fsPath || null;
 }
@@ -5029,10 +5028,10 @@ function activate(context) {
         mergeIdeaStructure(result);
         webviewManager.postMessage({ type: "updateData", data: result });
       }
-    } else if (msg.type === "requestRefresh") {
-      vscode6.commands.executeCommand("codesight.refresh");
     } else if (msg.type === "chatRequest") {
       handleChatRequest(msg, analyzer, webviewManager);
+    } else if (msg.type === "requestRefresh") {
+      vscode6.commands.executeCommand("codesight.refresh");
     }
   });
   const root = getWorkspaceRoot();
@@ -5065,175 +5064,76 @@ function activate(context) {
   console.log("[codesight] Extension activated successfully");
 }
 function deactivate() {
-  for (const timer of activeTimers) {
-    clearInterval(timer);
-    clearTimeout(timer);
-  }
-  activeTimers.length = 0;
   analyzer = null;
 }
-function pickBestChatModel(models) {
-  const tierPatterns = [
-    { pattern: /claude.*opus|opus/i, score: 100 },
-    { pattern: /gpt-?5(?!.*mini)/i, score: 95 },
-    { pattern: /claude.*sonnet|sonnet/i, score: 90 },
-    { pattern: /gpt-?4\.?1(?!.*mini|.*nano)/i, score: 85 },
-    { pattern: /gpt-?4o(?!.*mini)/i, score: 80 },
-    { pattern: /claude.*haiku|haiku/i, score: 60 },
-    { pattern: /gpt-?5.*mini/i, score: 55 },
-    { pattern: /gpt-?4o.*mini/i, score: 50 },
-    { pattern: /gpt-?4\.?1.*mini/i, score: 48 },
-    { pattern: /gpt-?4\.?1.*nano/i, score: 40 },
-    { pattern: /raptor/i, score: 30 },
-    { pattern: /preview/i, score: -5 }
-  ];
-  function scoreModel(m) {
-    const text = `${m.name} ${m.id} ${m.family || ""} ${m.vendor || ""}`;
-    let score = 0;
-    for (const { pattern, score: s } of tierPatterns) {
-      if (pattern.test(text)) score += s;
-    }
-    if (m.maxInputTokens) {
-      score += Math.min(10, Math.floor(m.maxInputTokens / 2e4));
-    }
-    return score;
-  }
-  const scored = models.map((m) => ({ model: m, score: scoreModel(m) }));
-  scored.sort((a, b) => b.score - a.score);
-  return scored[0].model;
-}
-async function handleChatRequest(msg, analyzerInstance, webview) {
+async function handleChatRequest(msg, analyzer2, webviewManager2) {
   const { message, context, history } = msg;
-  const result = analyzerInstance?.getResult();
   let contextText = "";
-  if (context.ideaNode) {
-    contextText += `The user is asking about the concept "${context.ideaNode.label}": ${context.ideaNode.description}
+  if (context?.ideaNode) {
+    contextText += `Concept: ${context.ideaNode.label}
+Description: ${context.ideaNode.description}
 `;
     if (context.ideaNode.codeRefs?.length) {
-      contextText += `Related code: ${context.ideaNode.codeRefs.map(
-        (r) => r.type === "module" ? `module:${r.name}` : r.path
-      ).join(", ")}
+      contextText += `Code refs: ${context.ideaNode.codeRefs.map((r) => r.type === "module" ? r.name : r.path).join(", ")}
 `;
     }
   }
-  if (context.focusedNode) {
+  if (context?.focusedNode) {
     const fn = context.focusedNode;
-    if (fn.type === "module") {
-      contextText += `The user is asking about module "${fn.data.name}" (${fn.data.files?.length || 0} files, ${fn.data.lineCount || 0} lines)
+    contextText += `Focused ${fn.type}: ${fn.data?.name || fn.data?.path || ""}
 `;
-      if (fn.data.description) contextText += `Description: ${fn.data.description}
+    if (fn.data?.description) contextText += `Description: ${fn.data.description}
 `;
-    } else if (fn.type === "file") {
-      contextText += `The user is asking about file "${fn.data.name || fn.data.path}"
+    if (fn.data?.signature) contextText += `Signature: ${fn.data.signature}
 `;
-      if (fn.data.symbols?.length) {
-        contextText += `Symbols: ${fn.data.symbols.slice(0, 15).map((s) => `${s.kind} ${s.name}`).join(", ")}
-`;
-      }
-    } else if (fn.type === "symbol") {
-      contextText += `The user is asking about ${fn.data.kind} "${fn.data.name}"
-`;
-      if (fn.data.signature) contextText += `Signature: ${fn.data.signature}
-`;
-      if (fn.data.comment) contextText += `Comment: ${fn.data.comment}
-`;
-      if (fn.data.source) contextText += `Source:
-${fn.data.source.slice(0, 1500)}
-`;
-    }
   }
-  if (context.currentFile && result) {
-    for (const mod of result.modules || []) {
-      const file = mod.files?.find((f) => f.path === context.currentFile);
-      if (file) {
-        contextText += `Currently viewing: ${file.path} in module ${mod.name}
+  if (context?.currentFile) contextText += `Current file: ${context.currentFile}
 `;
-        contextText += `Symbols: ${file.symbols?.map((s) => `${s.kind} ${s.name}`).join(", ")}
+  if (context?.currentModule) contextText += `Current module: ${context.currentModule}
 `;
-        break;
-      }
-    }
-  }
+  const result = analyzer2?.getResult();
   if (result) {
-    contextText += `Project: ${result.projectName}, ${result.modules?.length} modules, ${result.languages?.join(", ")}
+    contextText += `
+Project: ${result.projectName} (${result.modules?.length || 0} modules, ${result.languages?.join(", ")})
+`;
+    contextText += `Modules: ${result.modules?.map((m) => m.name).join(", ")}
 `;
   }
   try {
     const models = await vscode6.lm.selectChatModels();
     if (models && models.length > 0) {
-      const model = pickBestChatModel(models);
-      const modelLabel = `${model.name}${model.vendor ? " (" + model.vendor + ")" : ""}`;
-      const prompt = `You are a code structure expert. Use this context to answer the user's question.
+      const model = models[0];
+      const messages = [
+        vscode6.LanguageModelChatMessage.User(
+          `You are a code assistant for the "${result?.projectName || "unknown"}" project.
 
+Context:
 ${contextText}
 
-User: ${message}`;
-      const messages = [vscode6.LanguageModelChatMessage.User(prompt)];
-      const response = await model.sendRequest(messages, {});
-      let fullText = "";
-      for await (const fragment of response.text) {
-        fullText += fragment;
+${history?.slice(-6).map((h) => `${h.role}: ${h.content}`).join("\n") || ""}
+
+User: ${message}`
+        )
+      ];
+      const response = await model.sendRequest(messages);
+      let text = "";
+      for await (const chunk2 of response.text) {
+        text += chunk2;
       }
-      webview.postMessage({ type: "chatResponse", text: fullText, model: modelLabel, originalMessage: message });
+      webviewManager2.postMessage({
+        type: "chatResponse",
+        text,
+        model: model.name || model.id,
+        originalMessage: message
+      });
       return;
     }
   } catch (_) {
   }
-  const root = getWorkspaceRoot();
-  if (root) {
-    const outDir = path4.join(root, ".codesight");
-    fs2.mkdirSync(outDir, { recursive: true });
-    const requestFile = path4.join(outDir, "chat-request.json");
-    fs2.writeFileSync(requestFile, JSON.stringify({
-      message,
-      context: contextText,
-      history: history?.slice(-6),
-      timestamp: Date.now()
-    }, null, 2));
-    const responseFile = path4.join(outDir, "chat-response.json");
-    const requestTimestamp = Date.now();
-    try {
-      fs2.unlinkSync(responseFile);
-    } catch (_) {
-    }
-    let poll;
-    let timeout;
-    const cleanup = () => {
-      clearInterval(poll);
-      clearTimeout(timeout);
-      const pollIdx = activeTimers.indexOf(poll);
-      if (pollIdx !== -1) activeTimers.splice(pollIdx, 1);
-      const timeoutIdx = activeTimers.indexOf(timeout);
-      if (timeoutIdx !== -1) activeTimers.splice(timeoutIdx, 1);
-    };
-    poll = setInterval(() => {
-      try {
-        if (!fs2.existsSync(responseFile)) return;
-        const raw = fs2.readFileSync(responseFile, "utf-8");
-        const data = JSON.parse(raw);
-        if (data.timestamp && data.timestamp > requestTimestamp - 1e3) {
-          cleanup();
-          webview.postMessage({ type: "chatResponse", text: data.text, model: "Claude Code (MCP)", originalMessage: message });
-          try {
-            fs2.unlinkSync(responseFile);
-          } catch (_) {
-          }
-        }
-      } catch (_) {
-      }
-    }, 1e3);
-    activeTimers.push(poll);
-    timeout = setTimeout(() => {
-      cleanup();
-    }, 18e4);
-    activeTimers.push(timeout);
-  } else {
-    webview.postMessage({
-      type: "chatResponse",
-      error: "No language model available and no workspace folder open.",
-      originalMessage: message
-    });
-  }
+  webviewManager2.postMessage({
+    type: "chatResponse",
+    error: "No language model available. Install GitHub Copilot (or another vscode.lm extension) to use chat, or use Claude Code with MCP for AI features."
+  });
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {

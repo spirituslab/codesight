@@ -193,19 +193,24 @@ export class CsApp extends LitElement {
   _goBack() {
     const s = store.state;
     if (s.currentLevel === 'symbols') {
-      store.setBatch({ currentLevel: 'files', currentFile: null });
+      if (s.currentModule === 'root') {
+        // Root files have no subdirs/files view — go directly to modules
+        store.setBatch({ currentLevel: 'modules', currentModule: null, currentSubdir: null, currentFile: null });
+      } else {
+        store.setBatch({ currentLevel: 'files', currentFile: null });
+      }
     } else if (s.currentLevel === 'files') {
       if (s.currentSubdir) {
         const parentPath = s.currentSubdir.includes('/')
           ? s.currentSubdir.substring(0, s.currentSubdir.lastIndexOf('/'))
           : null;
         store.setBatch({
-          currentLevel: parentPath ? 'subdirs' : 'modules',
+          currentLevel: 'subdirs',
           currentSubdir: parentPath,
-          currentModule: parentPath ? s.currentModule : null,
+          currentModule: s.currentModule,
         });
       } else {
-        store.setBatch({ currentLevel: 'modules', currentModule: null, currentSubdir: null });
+        store.setBatch({ currentLevel: 'subdirs', currentModule: s.currentModule, currentSubdir: null });
       }
     } else if (s.currentLevel === 'subdirs') {
       if (s.currentSubdir) {
@@ -213,9 +218,9 @@ export class CsApp extends LitElement {
           ? s.currentSubdir.substring(0, s.currentSubdir.lastIndexOf('/'))
           : null;
         store.setBatch({
-          currentLevel: parentPath ? 'subdirs' : 'modules',
+          currentLevel: 'subdirs',
           currentSubdir: parentPath,
-          currentModule: parentPath ? s.currentModule : null,
+          currentModule: s.currentModule,
         });
       } else {
         store.setBatch({ currentLevel: 'modules', currentModule: null, currentSubdir: null });
@@ -234,7 +239,7 @@ export class CsApp extends LitElement {
       if (action === 'modules') {
         store.setBatch({ currentLevel: 'modules', currentModule: null, currentSubdir: null, currentFile: null });
       } else if (action === 'module') {
-        store.setBatch({ currentLevel: 'files', currentModule: module, currentSubdir: null, currentFile: null });
+        store.setBatch({ currentLevel: 'subdirs', currentModule: module, currentSubdir: null, currentFile: null });
       } else if (action === 'subdir') {
         store.setBatch({ currentLevel: 'subdirs', currentModule: module, currentSubdir: subdir, currentFile: null });
       }

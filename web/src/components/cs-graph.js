@@ -311,7 +311,13 @@ export class CsGraph extends LitElement {
     const level = store.state.currentLevel;
 
     if (level === 'modules') {
-      this._drillToModule(id);
+      if (nodeType === 'file') {
+        // Root file at L1 — drill directly to symbols
+        this._setStoreState({ currentModule: 'root' });
+        this._drillToSymbols(id);
+      } else {
+        this._drillToModule(id);
+      }
     } else if (level === 'subdirs') {
       if (nodeType === 'file') {
         // Loose file at this level — drill to symbols
@@ -701,17 +707,7 @@ export class CsGraph extends LitElement {
 
   _getAllModules() {
     const DATA = store.state.DATA;
-    const allModules = [...DATA.modules];
-    if (DATA.rootFiles && DATA.rootFiles.length > 0) {
-      allModules.push({
-        name: 'root', path: '',
-        description: `${DATA.rootFiles.length} files in project root`,
-        fileCount: DATA.rootFiles.length,
-        lineCount: DATA.rootFiles.reduce((s, f) => s + f.lineCount, 0),
-        files: DATA.rootFiles,
-      });
-    }
-    return allModules;
+    return [...DATA.modules];
   }
 
   _renderModuleView() {
@@ -738,6 +734,25 @@ export class CsGraph extends LitElement {
           size: w, sizeH: w * 0.65,
           nodeType: 'module',
           info: mod,
+        },
+      });
+    }
+
+    // Add root files as individual file nodes at L1
+    const rootFiles = store.state.DATA.rootFiles || [];
+    const rootColor = '#6c7086'; // muted gray
+    for (const f of rootFiles) {
+      const w = Math.max(24, Math.min(50, 7 * Math.log2(f.lineCount + 1)));
+      const label = f.name.replace(/\.[^.]+$/, '');
+      elements.push({
+        data: {
+          id: f.path,
+          label,
+          color: rootColor,
+          borderColor: shadeColor(rootColor, -30),
+          size: w, sizeH: w * 0.55,
+          nodeType: 'file',
+          info: f,
         },
       });
     }

@@ -207,6 +207,26 @@ npm run watch         # Watch mode for extension
 2. Press **F5** — launches a new VS Code window with the extension loaded
 3. Open any project in that window and run **Codesight: Open Graph**
 
+### Web UI and the extension
+
+The web UI source lives in `web/src/` at the repo root. The VS Code extension serves these files from `vscode/web/src/` at runtime. To avoid maintaining two copies, `vscode/web` is a **symlink** to the root `web/` directory. This means edits to `web/src/` are immediately available to the extension — no copy step needed.
+
+If the symlink is missing (e.g., after a fresh clone on Windows), recreate it:
+
+```bash
+# From the repo root
+ln -s "$(pwd)/web" vscode/web
+```
+
+> **Note:** The installed extension (in `~/.vscode/extensions/` or `~/.vscode-oss/extensions/`) is a separate copy. During development, you can replace it with a symlink to `vscode/` so changes take effect without reinstalling:
+>
+> ```bash
+> rm -rf ~/.vscode-oss/extensions/codesight.codesight-<version>
+> ln -s /path/to/codesight/vscode ~/.vscode-oss/extensions/codesight.codesight-<version>
+> ```
+>
+> After this, just reload the VS Code window to pick up changes.
+
 ---
 
 ## License
